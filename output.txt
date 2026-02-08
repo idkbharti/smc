@@ -1,0 +1,7 @@
+Initializing SMC Logic...
+Running Loop...
+Simulation Complete.
+Total Drawings Generated: 27
+Internal OBs Identified: 0
+Swing OBs Identified: 0
+Sample Drawing: {'x': 167, 'y': 99.08202950749262, 'text': 'BOS', 'color': '#089981', 'style': 'label_down', 'size': 'tiny', 'type': 'label'}
