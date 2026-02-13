@@ -1,0 +1,196 @@
+//@version=5
+indicator('Advanced Pine', 'Advanced Pine', overlay = true, max_labels_count = 500, max_lines_count = 500)
+
+//-----------------------------------------------------------------------------
+// Inputs
+//-----------------------------------------------------------------------------
+insideColor             = input.color(color.new(color.blue, 0), "Inside Candle Color")
+showStructureInput      = input(true, "Show Swing Structure")
+showHighLowSwingsInput  = input(true, "Show Strong/Weak High/Low")
+
+swingsLengthInput       = input.int(50, "Swing Structure Length", minval=10)
+
+//-----------------------------------------------------------------------------
+// Constants & Types
+//-----------------------------------------------------------------------------
+COLOR_BLACK = color.black
+BULLISH     = 1
+BEARISH     = -1
+
+type pivot
+    float currentLevel
+    float lastLevel
+    bool crossed
+    int barTime
+    int barIndex
+
+type trailingExtremes
+    float top
+    float bottom
+    int barTime
+    int barIndex
+    int lastTopTime
+    int lastBottomTime
+
+type trend
+    int bias
+
+//-----------------------------------------------------------------------------
+// Variables
+//-----------------------------------------------------------------------------
+var pivot swingHigh                 = pivot.new(na, na, false, 0, 0)
+var pivot swingLow                  = pivot.new(na, na, false, 0, 0)
+var trailingExtremes trailing       = trailingExtremes.new(na, na, 0, 0, 0, 0)
+var trend swingTrend                = trend.new(0)
+
+//-----------------------------------------------------------------------------
+// Calculations - Inside Candle
+//-----------------------------------------------------------------------------
+isInside = high < high[1] and low > low[1]
+barcolor(isInside ? insideColor : na)
+
+//-----------------------------------------------------------------------------
+// Functions
+//-----------------------------------------------------------------------------
+leg(int size) =>
+    var leg = -1
+    if high[size] > ta.highest(size)
+        leg := 0 // Bearish leg starts (found High)
+    else if low[size] < ta.lowest(size)
+        leg := 1 // Bullish leg starts (found Low)
+    leg
+
+updateTrailingExtremes() =>
+    trailing.top            := math.max(high, trailing.top)
+    trailing.lastTopTime    := trailing.top == high ? time : trailing.lastTopTime
+    trailing.bottom         := math.min(low, trailing.bottom)
+    trailing.lastBottomTime := trailing.bottom == low ? time : trailing.lastBottomTime
+
+startOfNewLeg(int leg)      => ta.change(leg) != 0
+startOfBearishLeg(int leg)  => leg == 0 and leg[1] != 0
+startOfBullishLeg(int leg)  => leg == 1 and leg[1] != 1
+
+//-----------------------------------------------------------------------------
+// Logic - Swing Structure
+//-----------------------------------------------------------------------------
+getCurrentStructure(int size) =>
+    currentLeg              = leg(size)
+    newPivot                = startOfNewLeg(currentLeg)
+    pivotLow                = startOfBullishLeg(currentLeg)
+    pivotHigh               = startOfBearishLeg(currentLeg)
+
+    if newPivot
+        if swingTrend.bias == 0
+            swingTrend.bias := pivotLow ? BULLISH : BEARISH
+
+        if pivotLow
+            swingLow.lastLevel      := swingLow.currentLevel
+            swingLow.currentLevel   := low[size]
+            swingLow.crossed        := false
+            swingLow.barTime        := time[size]
+            swingLow.barIndex       := bar_index[size]
+            
+            // Sync trailing
+            trailing.bottom         := swingLow.currentLevel
+            trailing.barTime        := swingLow.barTime
+            trailing.barIndex       := swingLow.barIndex
+            trailing.lastBottomTime := swingLow.barTime
+
+        else
+            swingHigh.lastLevel     := swingHigh.currentLevel
+            swingHigh.currentLevel  := high[size]
+            swingHigh.crossed       := false
+            swingHigh.barTime       := time[size]
+            swingHigh.barIndex      := bar_index[size]
+
+            // Sync trailing
+            trailing.top            := swingHigh.currentLevel
+            trailing.barTime        := swingHigh.barTime
+            trailing.barIndex       := swingHigh.barIndex
+            trailing.lastTopTime    := swingHigh.barTime
+
+drawStructure(pivot p_ivot, string tag, color structureColor, string lineStyle, string labelStyle, string labelSize) =>    
+    var line l_ine      = line.new(na,na,na,na,xloc = xloc.bar_time)
+    var label l_abel    = label.new(na,na)
+
+    // Historical Logic
+    l_ine   := line.new(chart.point.new(p_ivot.barTime,na,p_ivot.currentLevel), chart.point.new(time,na,p_ivot.currentLevel), xloc.bar_time, color=structureColor, style=lineStyle)
+    l_abel  := label.new(chart.point.new(na,math.round(0.5*(p_ivot.barIndex+bar_index)),p_ivot.currentLevel), tag, xloc.bar_index, color=color(na), textcolor=structureColor, style=labelStyle, size = labelSize)
+
+displayStructure() =>
+    
+    // Bullish Break
+    if ta.crossover(close, swingHigh.currentLevel) and not swingHigh.crossed
+        string tag = swingTrend.bias == BEARISH ? 'CHoCH' : 'BOS'
+        swingTrend.bias   := BULLISH
+        swingHigh.crossed := true
+
+        if showStructureInput
+            drawStructure(swingHigh, tag, COLOR_BLACK, line.style_solid, label.style_label_down, size.small)
+
+    // Bearish Break
+    if ta.crossunder(close, swingLow.currentLevel) and not swingLow.crossed
+        string tag = swingTrend.bias == BULLISH ? 'CHoCH' : 'BOS'
+        swingTrend.bias   := BEARISH
+        swingLow.crossed  := true
+
+        if showStructureInput
+            drawStructure(swingLow, tag, COLOR_BLACK, line.style_solid, label.style_label_up, size.small)
+
+//-----------------------------------------------------------------------------
+// Execution
+//-----------------------------------------------------------------------------
+if showHighLowSwingsInput
+    updateTrailingExtremes()
+
+getCurrentStructure(swingsLengthInput)
+displayStructure()
+
+//-----------------------------------------------------------------------------
+// Strong/Weak High/Low Lines
+//-----------------------------------------------------------------------------
+var line highLine       = line.new(na, na, na, na, xloc=xloc.bar_time, color=COLOR_BLACK)
+var line lowLine        = line.new(na, na, na, na, xloc=xloc.bar_time, color=COLOR_BLACK)
+var label highLabel     = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na), textcolor=COLOR_BLACK, style=label.style_label_down, size=size.tiny)
+var label lowLabel      = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na), textcolor=COLOR_BLACK, style=label.style_label_up, size=size.tiny)
+
+if showHighLowSwingsInput
+    barDuration = time - time[1]
+    rightTimeBar = last_bar_time + 20 * barDuration
+    
+    if not na(trailing.top)
+        line.set_xy1(highLine, trailing.lastTopTime, trailing.top)
+        line.set_xy2(highLine, rightTimeBar, trailing.top)
+        label.set_xy(highLabel, rightTimeBar, trailing.top)
+        label.set_text(highLabel, swingTrend.bias == BEARISH ? 'Strong High' : 'Weak High')
+
+    if not na(trailing.bottom)
+        line.set_xy1(lowLine, trailing.lastBottomTime, trailing.bottom)
+        line.set_xy2(lowLine, rightTimeBar, trailing.bottom)
+        label.set_xy(lowLabel, rightTimeBar, trailing.bottom)
+        label.set_text(lowLabel, swingTrend.bias == BULLISH ? 'Strong Low' : 'Weak Low')
+
+//-----------------------------------------------------------------------------
+// Trend Display Logic
+//-----------------------------------------------------------------------------
+// Fetch the 15m bias. 'barmerge.lookahead_off' ensures no repainting.
+int tf15_trend = request.security(syminfo.tickerid, "15", swingTrend.bias, lookahead = barmerge.lookahead_off)
+
+// Display Table
+var table trendTable = table.new(position.top_right, 1, 2, border_width = 1)
+
+if barstate.islast
+    // Current Trend
+    int currentTrend = swingTrend.bias
+    string trendText = currentTrend == BULLISH ? "Trend: BULLISH" : currentTrend == BEARISH ? "Trend: BEARISH" : "Trend: Neutral"
+    color  bgColor   = currentTrend == BULLISH ? color.new(color.green, 70) : currentTrend == BEARISH ? color.new(color.red, 70) : color.new(color.gray, 70)
+    color  txtColor  = currentTrend == BULLISH ? color.green : currentTrend == BEARISH ? color.red : color.gray
+    
+    table.cell(trendTable, 0, 0, trendText, bgcolor = bgColor, text_color = txtColor, text_size = size.small)
+
+    // 15m Trend
+    string tf15Text = tf15_trend == BULLISH ? "15m Trend: BULLISH" : tf15_trend == BEARISH ? "15m Trend: BEARISH" : "15m Trend: Neutral"
+    color  tf15Bg   = tf15_trend == BULLISH ? color.new(color.green, 70) : tf15_trend == BEARISH ? color.new(color.red, 70) : color.new(color.gray, 70)
+    color  tf15Txt  = tf15_trend == BULLISH ? color.green : tf15_trend == BEARISH ? color.red : color.gray
+    
+    table.cell(trendTable, 0, 1, tf15Text, bgcolor = tf15Bg, text_color = tf15Txt, text_size = size.small)
