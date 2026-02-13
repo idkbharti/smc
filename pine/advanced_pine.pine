@@ -109,6 +109,8 @@ getCurrentStructure(int size) =>
             trailing.barIndex       := swingHigh.barIndex
             trailing.lastTopTime    := swingHigh.barTime
 
+    swingTrend.bias
+
 drawStructure(pivot p_ivot, string tag, color structureColor, string lineStyle, string labelStyle, string labelSize) =>    
     var line l_ine      = line.new(na,na,na,na,xloc = xloc.bar_time)
     var label l_abel    = label.new(na,na)
@@ -173,8 +175,50 @@ if showHighLowSwingsInput
 //-----------------------------------------------------------------------------
 // Trend Display Logic
 //-----------------------------------------------------------------------------
+// Isolated logic for security to avoid side-effect errors
+calcTrendForSecurity(int size) =>
+    // Define local state isolated from the main chart
+    var pivot sHigh = pivot.new(na, na, false, 0, 0)
+    var pivot sLow  = pivot.new(na, na, false, 0, 0)
+    var trend sTrend = trend.new(0)
+    
+    // We can reuse the helper functions as they don't modify globals
+    currentLeg = leg(size)
+    newPivot   = startOfNewLeg(currentLeg)
+    pivotLow   = startOfBullishLeg(currentLeg)
+    
+    if newPivot
+        // Infer trend if Neutral
+        if sTrend.bias == 0
+            sTrend.bias := pivotLow ? BULLISH : BEARISH
+            
+        if pivotLow
+            sLow.lastLevel      := sLow.currentLevel
+            sLow.currentLevel   := low[size]
+            sLow.crossed        := false
+            // Note: We don't need to track barTime/Index for trend bias calculation
+            // checking 'crossover' or 'crossunder' logic for BOS/CHoCH might require level history
+            
+        else
+            sHigh.lastLevel     := sHigh.currentLevel
+            sHigh.currentLevel  := high[size]
+            sHigh.crossed       := false
+
+    // BOS/CHoCH Logic (Simplified for Trend Bias)
+    // Bullish Break
+    if ta.crossover(close, sHigh.currentLevel) and not sHigh.crossed
+        sTrend.bias     := BULLISH
+        sHigh.crossed   := true
+
+    // Bearish Break
+    if ta.crossunder(close, sLow.currentLevel) and not sLow.crossed
+        sTrend.bias     := BEARISH
+        sLow.crossed    := true
+            
+    sTrend.bias
+
 // Fetch the 15m bias. 'barmerge.lookahead_off' ensures no repainting.
-int tf15_trend = request.security(syminfo.tickerid, "15", swingTrend.bias, lookahead = barmerge.lookahead_off)
+int tf15_trend = request.security(syminfo.tickerid, "15", calcTrendForSecurity(swingsLengthInput), lookahead = barmerge.lookahead_off)
 
 // Display Table
 var table trendTable = table.new(position.top_right, 1, 2, border_width = 1)
