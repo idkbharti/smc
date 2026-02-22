@@ -70,6 +70,31 @@ startOfNewLeg(int leg)      => ta.change(leg) != 0
 startOfBearishLeg(int leg)  => leg == 0 and leg[1] != 0
 startOfBullishLeg(int leg)  => leg == 1 and leg[1] != 1
 
+// Convert raw timeframe.period string to a TradingView-style label
+// e.g. "240" → "4H", "60" → "1H", "15" → "15m", "D" → "1D"
+formatTF(string tf) =>
+    switch tf
+        "1"   => "1m"
+        "2"   => "2m"
+        "3"   => "3m"
+        "5"   => "5m"
+        "10"  => "10m"
+        "15"  => "15m"
+        "20"  => "20m"
+        "30"  => "30m"
+        "45"  => "45m"
+        "60"  => "1H"
+        "120" => "2H"
+        "180" => "3H"
+        "240" => "4H"
+        "360" => "6H"
+        "480" => "8H"
+        "720" => "12H"
+        "D"   => "1D"
+        "W"   => "1W"
+        "M"   => "1M"
+        => tf  // fallback for any unlisted timeframe
+
 //-----------------------------------------------------------------------------
 // Logic - Swing Structure
 //-----------------------------------------------------------------------------
@@ -146,6 +171,12 @@ if showHighLowSwingsInput
     updateTrailingExtremes()
 
 getCurrentStructure(swingsLengthInput)
+
+// Snapshot crossed-flags BEFORE displayStructure() sets them to true.
+// We use these snapshots in the OB section below to detect fresh BOS/CHoCH events.
+_obPreHighCrossed = swingHigh.crossed
+_obPreLowCrossed  = swingLow.crossed
+
 displayStructure()
 
 //-----------------------------------------------------------------------------
@@ -157,20 +188,25 @@ var label highLabel     = label.new(na, na, text="", xloc=xloc.bar_time, color=c
 var label lowLabel      = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na), textcolor=COLOR_BLACK, style=label.style_label_up, size=size.tiny)
 
 if showHighLowSwingsInput
-    barDuration = time - time[1]
+    barDuration  = time - time[1]
     rightTimeBar = last_bar_time + 20 * barDuration
-    
+    tf_str       = formatTF(timeframe.period)  // e.g. "4H", "15m", "1D"
+
     if not na(trailing.top)
-        line.set_xy1(highLine, trailing.lastTopTime, trailing.top)
-        line.set_xy2(highLine, rightTimeBar, trailing.top)
-        label.set_xy(highLabel, rightTimeBar, trailing.top)
-        label.set_text(highLabel, swingTrend.bias == BEARISH ? 'Strong High' : 'Weak High')
+        bool isStrongHigh = swingTrend.bias == BEARISH
+        line.set_xy1(highLine,    trailing.lastTopTime, trailing.top)
+        line.set_xy2(highLine,    rightTimeBar, trailing.top)
+        line.set_style(highLine,  isStrongHigh ? line.style_solid : line.style_dashed)
+        label.set_xy(highLabel,   rightTimeBar, trailing.top)
+        label.set_text(highLabel, (isStrongHigh ? 'Strong High' : 'Weak High') + ' · ' + tf_str)
 
     if not na(trailing.bottom)
-        line.set_xy1(lowLine, trailing.lastBottomTime, trailing.bottom)
-        line.set_xy2(lowLine, rightTimeBar, trailing.bottom)
-        label.set_xy(lowLabel, rightTimeBar, trailing.bottom)
-        label.set_text(lowLabel, swingTrend.bias == BULLISH ? 'Strong Low' : 'Weak Low')
+        bool isStrongLow = swingTrend.bias == BULLISH
+        line.set_xy1(lowLine,    trailing.lastBottomTime, trailing.bottom)
+        line.set_xy2(lowLine,    rightTimeBar, trailing.bottom)
+        line.set_style(lowLine,  isStrongLow ? line.style_solid : line.style_dashed)
+        label.set_xy(lowLabel,   rightTimeBar, trailing.bottom)
+        label.set_text(lowLabel, (isStrongLow ? 'Strong Low' : 'Weak Low') + ' · ' + tf_str)
 
 //-----------------------------------------------------------------------------
 // Trend Display Logic
@@ -225,12 +261,12 @@ var table trendTable = table.new(position.top_right, 1, 2, border_width = 1)
 
 if barstate.islast
     // Current Trend
-    int currentTrend = swingTrend.bias
-    string trendText = currentTrend == BULLISH ? "Trend: BULLISH" : currentTrend == BEARISH ? "Trend: BEARISH" : "Trend: Neutral"
-    color  bgColor   = currentTrend == BULLISH ? color.new(color.green, 70) : currentTrend == BEARISH ? color.new(color.red, 70) : color.new(color.gray, 70)
-    color  txtColor  = currentTrend == BULLISH ? color.green : currentTrend == BEARISH ? color.red : color.gray
+    // int currentTrend = swingTrend.bias
+    // string trendText = currentTrend == BULLISH ? "Trend: BULLISH" : currentTrend == BEARISH ? "Trend: BEARISH" : "Trend: Neutral"
+    // color  bgColor   = currentTrend == BULLISH ? color.new(color.green, 70) : currentTrend == BEARISH ? color.new(color.red, 70) : color.new(color.gray, 70)
+    // color  txtColor  = currentTrend == BULLISH ? color.green : currentTrend == BEARISH ? color.red : color.gray
     
-    table.cell(trendTable, 0, 0, trendText, bgcolor = bgColor, text_color = txtColor, text_size = size.small)
+    // table.cell(trendTable, 0, 0, trendText, bgcolor = bgColor, text_color = txtColor, text_size = size.small)
 
     // 15m Trend
     string tf15Text = tf15_trend == BULLISH ? "15m Trend: BULLISH" : tf15_trend == BEARISH ? "15m Trend: BEARISH" : "15m Trend: Neutral"
@@ -238,3 +274,266 @@ if barstate.islast
     color  tf15Txt  = tf15_trend == BULLISH ? color.green : tf15_trend == BEARISH ? color.red : color.gray
     
     table.cell(trendTable, 0, 1, tf15Text, bgcolor = tf15Bg, text_color = tf15Txt, text_size = size.small)
+
+//=============================================================================
+// ORDER BLOCKS  (ported from LuxAlgo Smart Money Concepts)
+//=============================================================================
+
+//-----------------------------------------------------------------------------
+// OB Inputs
+//-----------------------------------------------------------------------------
+grpOB = "Order Blocks"
+
+showSwingOBInput    = input.bool(true,  "Show Swing OBs",        group = grpOB, inline = "sob")
+swingOBCountInput   = input.int( 5,     "",                      group = grpOB, inline = "sob", minval = 1, maxval = 20)
+showInternalOBInput = input.bool(true,  "Show Internal OBs",     group = grpOB, inline = "iob")
+internalOBCountInput= input.int( 5,     "",                      group = grpOB, inline = "iob", minval = 1, maxval = 20)
+
+obFilterInput       = input.string("Atr", "OB Filter",           group = grpOB, options = ["Atr","Cumulative Mean Range"],
+     tooltip = "ATR: skip candles wider than 2×ATR (high-volatility). Cumulative Mean Range: uses rolling average true range.")
+obMitigationInput   = input.string("High/Low", "OB Mitigation",  group = grpOB, options = ["Close","High/Low"],
+     tooltip = "Price source used to determine when an OB is invalidated (mitigated).")
+
+swingBullOBColor    = input.color(color.new(#1848cc, 93), "Swing Bullish OB",   group = grpOB)
+swingBearOBColor    = input.color(color.new(#b22833, 93), "Swing Bearish OB",   group = grpOB)
+intBullOBColor      = input.color(color.new(#3179f5, 93), "Internal Bullish OB",group = grpOB)
+intBearOBColor      = input.color(color.new(#f77c80, 93), "Internal Bearish OB",group = grpOB)
+
+//-----------------------------------------------------------------------------
+// OB Type
+//-----------------------------------------------------------------------------
+// Represents a single order block candle
+type orderBlock
+    float barHigh       // high of the OB candle
+    float barLow        // low  of the OB candle
+    int   barTime       // time of the OB candle
+    int   bias          // BULLISH (+1) or BEARISH (-1)
+    bool  partial = false // true when price has entered the zone but not fully broken it
+
+//-----------------------------------------------------------------------------
+// OB Storage Arrays
+//-----------------------------------------------------------------------------
+// Each swing BOS/CHoCH stores a new OB; mitigated ones are discarded.
+var array<orderBlock> swingOBs    = array.new<orderBlock>()
+var array<orderBlock> internalOBs = array.new<orderBlock>()
+
+// Parallel arrays of boxes AND labels for efficient `set_*` updates (created once at bar 0)
+var array<box>   swingOBBoxes    = array.new<box>()
+var array<box>   internalOBBoxes = array.new<box>()
+var array<label> swingOBLabels    = array.new<label>()
+var array<label> internalOBLabels = array.new<label>()
+
+if barstate.isfirst
+    if showSwingOBInput
+        for _i = 1 to swingOBCountInput
+            swingOBBoxes.push(box.new(na, na, na, na, xloc = xloc.bar_time))
+            swingOBLabels.push(label.new(na, na, text = "", xloc = xloc.bar_time,
+                 color = color(na), style = label.style_label_left,
+                 textcolor = color.gray, size = size.tiny))
+    if showInternalOBInput
+        for _i = 1 to internalOBCountInput
+            internalOBBoxes.push(box.new(na, na, na, na, xloc = xloc.bar_time))
+            internalOBLabels.push(label.new(na, na, text = "", xloc = xloc.bar_time,
+                 color = color(na), style = label.style_label_left,
+                 textcolor = color.gray, size = size.tiny))
+
+//-----------------------------------------------------------------------------
+// OB Volatility Filter  (mirrors LuxAlgo)
+//-----------------------------------------------------------------------------
+// Volatile candles are excluded from being picked as the OB candle.
+// Instead their opposite extreme is used (parsedHigh / parsedLow arrays).
+ob_atrMeasure    = ta.atr(200)
+ob_volatility    = obFilterInput == "Atr" ? ob_atrMeasure : ta.cum(ta.tr) / bar_index
+ob_highVolBar    = (high - low) >= 2 * ob_volatility
+
+// "Parsed" high/low: if volatile, flip to opposite extreme; otherwise keep as-is
+ob_parsedHigh    = ob_highVolBar ? low  : high
+ob_parsedLow     = ob_highVolBar ? high : low
+
+// Rolling arrays — we need history to look back from pivot to current bar
+var array<float> ob_parsedHighs = array.new<float>()
+var array<float> ob_parsedLows  = array.new<float>()
+var array<float> ob_highs       = array.new<float>()
+var array<float> ob_lows        = array.new<float>()
+var array<int>   ob_times       = array.new<int>()
+
+ob_parsedHighs.push(ob_parsedHigh)
+ob_parsedLows.push(ob_parsedLow)
+ob_highs.push(high)
+ob_lows.push(low)
+ob_times.push(time)
+
+//-----------------------------------------------------------------------------
+// OB Mitigation Sources
+//-----------------------------------------------------------------------------
+ob_bearMitigationSrc = obMitigationInput == "Close" ? close : high
+ob_bullMitigationSrc = obMitigationInput == "Close" ? close : low
+
+//-----------------------------------------------------------------------------
+// [LEGACY - kept for reference, no longer called]
+// storeOB_legacy()  ─ OLD approach: on every BOS/CHoCH, scan the whole range
+//   from pivot.barIndex → bar_index and pick the single best candle:
+//     • BULLISH OB → lowest parsedLow in range (demand candle)
+//     • BEARISH OB → highest parsedHigh in range (supply candle)
+//   Limitation: does not validate that the selected candle actually swept
+//   liquidity or that a Fair Value Gap existed after it.
+//-----------------------------------------------------------------------------
+storeOB_legacy(pivot p_ivot, bool internal, int bias) =>
+    bool show = internal ? showInternalOBInput : showSwingOBInput
+
+    if show
+        array<float> arr  = na
+        int parsedIdx     = na
+
+        if bias == BEARISH
+            // Bearish OB: highest parsed high between pivot bar and now
+            arr       := ob_parsedHighs.slice(p_ivot.barIndex, bar_index)
+            parsedIdx := p_ivot.barIndex + arr.indexof(arr.max())
+        else
+            // Bullish OB: lowest parsed low between pivot bar and now
+            arr       := ob_parsedLows.slice(p_ivot.barIndex, bar_index)
+            parsedIdx := p_ivot.barIndex + arr.indexof(arr.min())
+
+        orderBlock ob = orderBlock.new(
+             ob_parsedHighs.get(parsedIdx),
+             ob_parsedLows.get(parsedIdx),
+             ob_times.get(parsedIdx),
+             bias)
+
+        array<orderBlock> obs = internal ? internalOBs : swingOBs
+
+        // Cap the array to avoid unbounded growth
+        if obs.size() >= 100
+            obs.pop()
+        obs.unshift(ob)
+
+//-----------------------------------------------------------------------------
+// deleteOBs()  ─ remove OBs whose price level has been mitigated (breached)
+//-----------------------------------------------------------------------------
+deleteOBs(bool internal) =>
+    array<orderBlock> obs = internal ? internalOBs : swingOBs
+
+    int i = obs.size() - 1
+    while i >= 0
+        orderBlock ob = obs.get(i)
+
+        if ob.bias == BEARISH
+            // Full mitigation: price fully above OB high
+            if ob_bearMitigationSrc > ob.barHigh
+                obs.remove(i)
+            // Partial mitigation: price entered the OB zone (above low, not yet above high)
+            else if ob_bearMitigationSrc > ob.barLow
+                ob.partial := true
+
+        else if ob.bias == BULLISH
+            // Full mitigation: price fully below OB low
+            if ob_bullMitigationSrc < ob.barLow
+                obs.remove(i)
+            // Partial mitigation: price entered the OB zone (below high, not yet below low)
+            else if ob_bullMitigationSrc < ob.barHigh
+                ob.partial := true
+
+        i -= 1
+
+//-----------------------------------------------------------------------------
+// drawOBs()  ─ paint the top-N OBs as boxes extending to the right
+//-----------------------------------------------------------------------------
+drawOBs(bool internal) =>
+    array<orderBlock> obs    = internal ? internalOBs : swingOBs
+    array<box>        boxes  = internal ? internalOBBoxes : swingOBBoxes
+    array<label>      labels = internal ? internalOBLabels : swingOBLabels
+    int maxOBs               = internal ? internalOBCountInput : swingOBCountInput
+    int obsSize              = obs.size()
+
+    // Match the same right-side endpoint used by Strong/Weak High/Low lines
+    int ob_rightTime = last_bar_time + 20 * (time - time[1])
+    // Current timeframe string for the inline OB label (e.g. "15", "5", "D")
+    string tf_tag = formatTF(timeframe.period)  // e.g. "4H", "15m", "1D"
+
+    if obsSize > 0
+        array<orderBlock> visible = obs.slice(0, math.min(maxOBs, obsSize))
+
+        for [idx, ob] in visible
+            // Partially mitigated OBs turn grey; active OBs keep their bias colour
+            color c = ob.partial
+                 ? color.new(color.gray, 88)   // light grey = touched but not broken
+                 : internal
+                      ? (ob.bias == BEARISH ? intBearOBColor  : intBullOBColor)
+                      : (ob.bias == BEARISH ? swingBearOBColor : swingBullOBColor)
+
+            // ── Box ──────────────────────────────────────────────────────────
+            box b = boxes.get(idx)
+            b.set_top_left_point(     chart.point.new(ob.barTime, na, ob.barHigh))
+            b.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.barLow))
+            b.set_border_color(internal ? na : c)
+            b.set_bgcolor(c)
+
+            // ── Timeframe label — right-aligned inside the OB box ────────────
+            // Placed at the right edge, vertically centred between high and low
+            float ob_mid    = math.avg(ob.barHigh, ob.barLow)
+            string ob_tag   = (ob.bias == BULLISH ? "Bull OB" : "Bear OB") + " · " + tf_tag
+            label lbl = labels.get(idx)
+            lbl.set_xy(ob_rightTime, ob_mid)
+            lbl.set_text(ob_tag)
+            lbl.set_textcolor(color.new(ob.bias == BULLISH ? color.blue : color.red, 30))
+
+//=============================================================================
+// VALID OB DETECTION — Liquidity Sweep + Fair Value Gap (NEW LOGIC)
+//=============================================================================
+// A valid Order Block must satisfy ALL of the following in a 3-candle sequence:
+//
+//   bar[2]  = OB candle  → must TAKE LIQUIDITY of the previous candle
+//             Bullish OB: bar[2].low  < bar[3].low   (swept previous low)
+//             Bearish OB: bar[2].high > bar[3].high  (swept previous high)
+//
+//   bar[1]  = reaction candle (just needs to exist between OB and FVG bar)
+//
+//   bar[0]  = FVG candle → must create a FAIR VALUE GAP with bar[2]
+//             Bullish FVG: bar[0].low  > bar[2].high  (gap above OB high)
+//             Bearish FVG: bar[0].high < bar[2].low   (gap below OB low)
+//
+//   Trend filter: Bullish OB only stored in BULLISH trend, Bearish in BEARISH.
+//
+//   The OB box is drawn around bar[2]'s high and low.
+//=============================================================================
+
+// ── Step 1: Liquidity sweep at bar[2] ───────────────────────────────────────
+ob_bullSweep = low[2]  < low[3]   // OB candle swept previous candle's LOW
+ob_bearSweep = high[2] > high[3]  // OB candle swept previous candle's HIGH
+
+// ── Step 2: FVG between bar[2] (OB candle) and bar[0] (current candle) ─────
+//   Bullish: gap exists when current LOW is above OB candle's HIGH
+ob_bullFVG  = low  > high[2]
+//   Bearish: gap exists when current HIGH is below OB candle's LOW
+ob_bearFVG  = high < low[2]
+
+// ── Step 3: Both conditions met + aligned with current swing trend ───────────
+validBullOB = ob_bullSweep and ob_bullFVG and swingTrend.bias == BULLISH
+validBearOB = ob_bearSweep and ob_bearFVG and swingTrend.bias == BEARISH
+
+// ── Step 4: Store the OB (coordinates taken from bar[2]) ────────────────────
+if validBullOB and showSwingOBInput
+    ob_entry = orderBlock.new(high[2], low[2], time[2], BULLISH)
+    if swingOBs.size() >= 100
+        swingOBs.pop()
+    swingOBs.unshift(ob_entry)
+
+if validBearOB and showSwingOBInput
+    ob_entry = orderBlock.new(high[2], low[2], time[2], BEARISH)
+    if swingOBs.size() >= 100
+        swingOBs.pop()
+    swingOBs.unshift(ob_entry)
+
+// ---- Delete mitigated OBs every bar ----
+if showSwingOBInput
+    deleteOBs(false)
+
+if showInternalOBInput
+    deleteOBs(true)
+
+// ---- Draw on last confirmed / realtime bar ----
+if barstate.islastconfirmedhistory or barstate.islast
+    if showSwingOBInput
+        drawOBs(false)
+    if showInternalOBInput
+        drawOBs(true)

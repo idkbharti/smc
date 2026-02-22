@@ -1,0 +1,4 @@
+Attempting to exchange Auth Code for Access Token...
+Auth Code Length: 589
+Response: {'code': -1, 'message': 'invalid auth code', 's': 'error'}
+Failed to generate token.
