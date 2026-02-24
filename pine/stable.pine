@@ -10,18 +10,6 @@ showHighLowSwingsInput  = input(true, "Show Strong/Weak High/Low")
 
 swingsLengthInput       = input.int(50, "Swing Structure Length", minval=10)
 
-// HTF Strong/Weak Lines
-grpHTF              = "HTF Levels"
-showHTF15mInput     = input.bool(true,  "Show 15m Strong/Weak",   group = grpHTF)
-showHTF1HInput      = input.bool(true,  "Show 1H Strong/Weak",    group = grpHTF)
-showHTFDailyInput   = input.bool(true,  "Show Daily Strong/Weak", group = grpHTF)
-htf15m_highColor    = input.color(color.new(#f57c00, 0),  "15m High Color",   group = grpHTF, inline="15mc")
-htf15m_lowColor     = input.color(color.new(#0288d1, 0),  "15m Low Color",    group = grpHTF, inline="15mc")
-htf1H_highColor     = input.color(color.new(#e65100, 0),  "1H High Color",    group = grpHTF, inline="1hc")
-htf1H_lowColor      = input.color(color.new(#1565c0, 0),  "1H Low Color",     group = grpHTF, inline="1hc")
-htfD_highColor      = input.color(color.new(#b71c1c, 0),  "Daily High Color", group = grpHTF, inline="dc")
-htfD_lowColor       = input.color(color.new(#0d47a1, 0),  "Daily Low Color",  group = grpHTF, inline="dc")
-
 //-----------------------------------------------------------------------------
 // Constants & Types
 //-----------------------------------------------------------------------------
@@ -222,85 +210,6 @@ if showHighLowSwingsInput
         label.set_text(lowLabel, (isStrongLow ? 'Strong Low' : 'Weak Low') + ' · ' + tf_str)
 
 //-----------------------------------------------------------------------------
-// HTF Strong/Weak High/Low Lines  (drawn from HTF pivot data on any TF)
-//-----------------------------------------------------------------------------
-// Helper: draw one HTF high+low pair.  Called once per HTF after security fetch.
-drawHTFLevels(bool show, float hTop, int hTopTime, float hBot, int hBotTime, int hBias,
-              color hHighClr, color hLowClr, string tfLabel,
-              line hHighLine, line hLowLine, label hHighLbl, label hLowLbl) =>
-    if show
-        barDuration  = time - time[1]
-        rightTimeBar = last_bar_time + 20 * barDuration
-
-        if not na(hTop)
-            bool isStrong = hBias == BEARISH
-            line.set_xy1(hHighLine,   hTopTime,    hTop)
-            line.set_xy2(hHighLine,   rightTimeBar, hTop)
-            line.set_color(hHighLine, hHighClr)
-            line.set_style(hHighLine, isStrong ? line.style_solid : line.style_dashed)
-            label.set_xy(hHighLbl,    rightTimeBar, hTop)
-            label.set_text(hHighLbl,  (isStrong ? 'Strong High' : 'Weak High') + ' · ' + tfLabel)
-            label.set_textcolor(hHighLbl, hHighClr)
-
-        if not na(hBot)
-            bool isStrong = hBias == BULLISH
-            line.set_xy1(hLowLine,    hBotTime,     hBot)
-            line.set_xy2(hLowLine,    rightTimeBar,  hBot)
-            line.set_color(hLowLine,  hLowClr)
-            line.set_style(hLowLine,  isStrong ? line.style_solid : line.style_dashed)
-            label.set_xy(hLowLbl,     rightTimeBar, hBot)
-            label.set_text(hLowLbl,   (isStrong ? 'Strong Low' : 'Weak Low') + ' · ' + tfLabel)
-            label.set_textcolor(hLowLbl, hLowClr)
-
-//-----------------------------------------------------------------------------
-// HTF Level Calculator  (self-contained for request.security)
-//-----------------------------------------------------------------------------
-// Returns [top, lastTopTime, bottom, lastBotTime, bias] using isolated var state.
-calcHTFLevels(int size) =>
-    var pivot   sHigh        = pivot.new(na, na, false, 0, 0)
-    var pivot   sLow         = pivot.new(na, na, false, 0, 0)
-    var trend   sTrend       = trend.new(0)
-    var float   tTop         = na
-    var float   tBottom      = na
-    var int     tLastTopTime = 0
-    var int     tLastBotTime = 0
-
-    // Update trailing extremes every bar
-    tTop         := na(tTop)    ? high : math.max(high, tTop)
-    tBottom      := na(tBottom) ? low  : math.min(low,  tBottom)
-    tLastTopTime := tTop    == high ? time : tLastTopTime
-    tLastBotTime := tBottom == low  ? time : tLastBotTime
-
-    currentLeg = leg(size)
-    newPivot   = startOfNewLeg(currentLeg)
-    pivotLow   = startOfBullishLeg(currentLeg)
-
-    if newPivot
-        if sTrend.bias == 0
-            sTrend.bias := pivotLow ? BULLISH : BEARISH
-
-        if pivotLow
-            sLow.currentLevel   := low[size]
-            sLow.crossed        := false
-            tBottom             := sLow.currentLevel
-            tLastBotTime        := time[size]
-        else
-            sHigh.currentLevel  := high[size]
-            sHigh.crossed       := false
-            tTop                := sHigh.currentLevel
-            tLastTopTime        := time[size]
-
-    // BOS/CHoCH for bias update
-    if ta.crossover(close, sHigh.currentLevel) and not sHigh.crossed
-        sTrend.bias   := BULLISH
-        sHigh.crossed := true
-    if ta.crossunder(close, sLow.currentLevel) and not sLow.crossed
-        sTrend.bias   := BEARISH
-        sLow.crossed  := true
-
-    [tTop, tLastTopTime, tBottom, tLastBotTime, sTrend.bias]
-
-//-----------------------------------------------------------------------------
 // Trend Display Logic
 //-----------------------------------------------------------------------------
 // Isolated logic for security to avoid side-effect errors
@@ -345,72 +254,29 @@ calcTrendForSecurity(int size) =>
             
     sTrend.bias
 
-// Fetch the 15m bias. 'barmerge.lookahead_off' ensures no repainting.
+// Fetch the 15m, 1H, Daily bias. 'barmerge.lookahead_off' ensures no repainting.
 int tf15_trend = request.security(syminfo.tickerid, "15", calcTrendForSecurity(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// Fetch HTF levels  (tuple unpacking via security)
-[htf15m_top,  htf15m_topTime, htf15m_bot,  htf15m_botTime, htf15m_bias] = request.security(syminfo.tickerid, "15", calcHTFLevels(swingsLengthInput), lookahead = barmerge.lookahead_off)
-[htf1H_top,   htf1H_topTime,  htf1H_bot,   htf1H_botTime,  htf1H_bias ] = request.security(syminfo.tickerid, "60", calcHTFLevels(swingsLengthInput), lookahead = barmerge.lookahead_off)
-[htfD_top,    htfD_topTime,   htfD_bot,    htfD_botTime,   htfD_bias  ] = request.security(syminfo.tickerid, "D",  calcHTFLevels(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// ── 15m HTF lines ───────────────────────────────────────────────────────────
-var line  htf15m_highLine = line.new(na, na, na, na, xloc=xloc.bar_time, width=1)
-var line  htf15m_lowLine  = line.new(na, na, na, na, xloc=xloc.bar_time, width=1)
-var label htf15m_highLbl  = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na),
-     style=label.style_label_lower_right, size=size.small)
-var label htf15m_lowLbl   = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na),
-     style=label.style_label_upper_right, size=size.small)
-
-// ── 1H HTF lines ─────────────────────────────────────────────────────────────
-var line  htf1H_highLine = line.new(na, na, na, na,  xloc=xloc.bar_time, width=1)
-var line  htf1H_lowLine  = line.new(na, na, na, na,  xloc=xloc.bar_time, width=1)
-var label htf1H_highLbl  = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na),
-     style=label.style_label_lower_right, size=size.small)
-var label htf1H_lowLbl   = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na),
-     style=label.style_label_upper_right, size=size.small)
-
-// ── Daily HTF lines ───────────────────────────────────────────────────────────
-var line  htfD_highLine  = line.new(na, na, na, na,  xloc=xloc.bar_time, width=2)
-var line  htfD_lowLine   = line.new(na, na, na, na,  xloc=xloc.bar_time, width=2)
-var label htfD_highLbl   = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na),
-     style=label.style_label_lower_right, size=size.small)
-var label htfD_lowLbl    = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na),
-     style=label.style_label_upper_right, size=size.small)
-
-drawHTFLevels(showHTF15mInput,   htf15m_top, htf15m_topTime, htf15m_bot, htf15m_botTime, htf15m_bias,
-              htf15m_highColor, htf15m_lowColor, "15m",
-              htf15m_highLine, htf15m_lowLine, htf15m_highLbl, htf15m_lowLbl)
-
-drawHTFLevels(showHTF1HInput,    htf1H_top, htf1H_topTime, htf1H_bot, htf1H_botTime, htf1H_bias,
-              htf1H_highColor, htf1H_lowColor, "1H",
-              htf1H_highLine, htf1H_lowLine, htf1H_highLbl, htf1H_lowLbl)
-
-drawHTFLevels(showHTFDailyInput, htfD_top,  htfD_topTime,  htfD_bot,  htfD_botTime,  htfD_bias,
-              htfD_highColor,  htfD_lowColor,  "1D",
-              htfD_highLine,   htfD_lowLine,   htfD_highLbl,  htfD_lowLbl)
+int tf1H_trend = request.security(syminfo.tickerid, "60", calcTrendForSecurity(swingsLengthInput), lookahead = barmerge.lookahead_off)
+int tfD_trend  = request.security(syminfo.tickerid, "D",  calcTrendForSecurity(swingsLengthInput), lookahead = barmerge.lookahead_off)
 
 // Display Table  (rows: 0=15m, 1=1H, 2=Daily)
 var table trendTable = table.new(position.top_right, 1, 3, border_width = 1)
 
-// Helper inline: trend → text/bg/txt color
+// Helper: trend → text / bg color  (text is always black)
 trendText(int bias, string label) =>
     string t = bias == BULLISH ? label + ": BULLISH" : bias == BEARISH ? label + ": BEARISH" : label + ": Neutral"
     color  bg = bias == BULLISH ? color.new(color.green, 70) : bias == BEARISH ? color.new(color.red, 70) : color.new(color.gray, 70)
-    color  fg = color.black // Text is always black
-    [t, bg, fg]
+    [t, bg]
 
 if barstate.islast
-    // 15m Trend
-    [tf15Text, tf15Bg, tf15Txt] = trendText(tf15_trend, "15m")
-    table.cell(trendTable, 0, 0, tf15Text, bgcolor = tf15Bg, text_color = tf15Txt, text_size = size.small)
+    [tf15Text, tf15Bg] = trendText(tf15_trend, "15m")
+    table.cell(trendTable, 0, 0, tf15Text, bgcolor = tf15Bg, text_color = color.black, text_size = size.small)
 
-    // 1H Trend
-    [tf1HText, tf1HBg, tf1HTxt] = trendText(htf1H_bias, "1H")
-    table.cell(trendTable, 0, 1, tf1HText, bgcolor = tf1HBg, text_color = tf1HTxt, text_size = size.small)
+    [tf1HText, tf1HBg] = trendText(tf1H_trend, "1H")
+    table.cell(trendTable, 0, 1, tf1HText, bgcolor = tf1HBg, text_color = color.black, text_size = size.small)
 
-    // Daily Trend
-    [tfDText, tfDBg, tfDTxt] = trendText(htfD_bias, "1D")
-    table.cell(trendTable, 0, 2, tfDText,  bgcolor = tfDBg,  text_color = tfDTxt,  text_size = size.small)
+    [tfDText, tfDBg] = trendText(tfD_trend, "1D")
+    table.cell(trendTable, 0, 2, tfDText,  bgcolor = tfDBg,  text_color = color.black, text_size = size.small)
 
 //=============================================================================
 // ORDER BLOCKS  (ported from LuxAlgo Smart Money Concepts)
