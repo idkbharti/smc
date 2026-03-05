@@ -300,19 +300,6 @@ internalOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, i
 showRefinedOBInput  = input.bool(true,  "Show Refined OB",       group = grpOB, tooltip="Automatically refines OBs to lower timeframes: (15m->5m), (1H->15m), (1D->1H).")
 alertRefinedOBInput = input.bool(false, "Alert when Refined OB is Tapped", group = grpOB, tooltip="Triggers a TradingView alert whenever price first taps a Refined OB. Use 'Any alert() function call' in your TV alert settings.")
 
-//-----------------------------------------------------------------------------
-// Screener Inputs (Bypass Free Tier Limits)
-//-----------------------------------------------------------------------------
-grpScreener = "Screener (Multi-Ticker Alerts)"
-enableScreener = input.bool(false, "Enable Multi-Ticker Alerts", group = grpScreener, tooltip = "When ON, it scans these 5 symbols in the background and sends alerts for all of them using JUST ONE TradingView alert.")
-t1 = input.symbol("EURUSD", "Ticker 1", group = grpScreener)
-t2 = input.symbol("GBPUSD", "Ticker 2", group = grpScreener)
-t3 = input.symbol("USDJPY", "Ticker 3", group = grpScreener)
-t4 = input.symbol("AUDUSD", "Ticker 4", group = grpScreener)
-t5 = input.symbol("USDCAD", "Ticker 5", group = grpScreener)
-t6 = input.symbol("BTCUSD", "Ticker 6", group = grpScreener)
-t7 = input.symbol("XAUUSD", "Ticker 7", group = grpScreener)
-
 obTrendFilterInput  = input.bool(false, "Filter OB by Trend",    group = grpOB, tooltip="If disabled, shows both Bullish and Bearish OBs regardless of the current trend.")
 
 obFilterInput       = input.string("Atr", "OB Filter",           group = grpOB, options = ["Atr","Cumulative Mean Range"],
@@ -738,67 +725,6 @@ if showSwingOBInput
 
 if showInternalOBInput
     deleteOBs(1)
-
-//=============================================================================
-// SCREENER LOGIC — Scan multiple tickers to bypass TV free alert limits
-//=============================================================================
-
-// Helper to evaluate the pre-fetched data and fire alerts
-checkTickerAlerts(string ticker, bool vBull, bool vBear, float h2, float l2, int t2, float c, float h, float l, float ltfBull_H, float ltfBull_L, int ltfBull_T, float ltfBear_H, float ltfBear_L, int ltfBear_T) =>
-    bool alertTriggered = false
-    if ticker != ""
-        // This is a simplified stateless alert check specifically built to fire when an OB
-        // is first tapped. It evaluates if the *current* bar's high/low is penetrating the established OB.
-        
-        if vBear and not na(ltfBear_H)
-            // If Bearish OB exists and current High breaks the refined Low (tap)
-            if h > ltfBear_L and c < ltfBear_H
-                alert("Bearish Refined OB Tapped on " + ticker + " (" + tf_tag + "+" + formatTF(autoLtfStr) + ")", alert.freq_once_per_bar_close)
-                alertTriggered := true
-
-        if vBull and not na(ltfBull_L)
-            // If Bullish OB exists and current Low breaks the refined High (tap)
-            if l < ltfBull_H and c > ltfBull_L
-                alert("Bullish Refined OB Tapped on " + ticker + " (" + tf_tag + "+" + formatTF(autoLtfStr) + ")", alert.freq_once_per_bar_close)
-                alertTriggered := true
-    alertTriggered
-
-// T1
-[vBull1, vBear1, h2_1, l2_1, t2_1, c1, h1, l1] = request.security(t1, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H1, ltfBull_L1, ltfBull_T1, ltfBear_H1, ltfBear_L1, ltfBear_T1] = request.security(t1, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T2
-[vBull2, vBear2, h2_2, l2_2, t2_2, c2, h2_h, l2_l] = request.security(t2, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H2, ltfBull_L2, ltfBull_T2, ltfBear_H2, ltfBear_L2, ltfBear_T2] = request.security(t2, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T3
-[vBull3, vBear3, h2_3, l2_3, t2_3, c3, h3, l3] = request.security(t3, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H3, ltfBull_L3, ltfBull_T3, ltfBear_H3, ltfBear_L3, ltfBear_T3] = request.security(t3, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T4
-[vBull4, vBear4, h2_4, l2_4, t2_4, c4, h4, l4] = request.security(t4, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H4, ltfBull_L4, ltfBull_T4, ltfBear_H4, ltfBear_L4, ltfBear_T4] = request.security(t4, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T5
-[vBull5, vBear5, h2_5, l2_5, t2_5, c5, h5, l5] = request.security(t5, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H5, ltfBull_L5, ltfBull_T5, ltfBear_H5, ltfBear_L5, ltfBear_T5] = request.security(t5, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T6
-[vBull6, vBear6, h2_6, l2_6, t2_6, c6, h6, l6] = request.security(t6, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H6, ltfBull_L6, ltfBull_T6, ltfBear_H6, ltfBear_L6, ltfBear_T6] = request.security(t6, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T7
-[vBull7, vBear7, h2_7, l2_7, t2_7, c7, h7, l7] = request.security(t7, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H7, ltfBull_L7, ltfBull_T7, ltfBear_H7, ltfBear_L7, ltfBear_T7] = request.security(t7, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-if enableScreener and alertRefinedOBInput
-    checkTickerAlerts(t1, vBull1, vBear1, h2_1, l2_1, t2_1, c1, h1, l1, ltfBull_H1, ltfBull_L1, ltfBull_T1, ltfBear_H1, ltfBear_L1, ltfBear_T1)
-    checkTickerAlerts(t2, vBull2, vBear2, h2_2, l2_2, t2_2, c2, h2_h, l2_l, ltfBull_H2, ltfBull_L2, ltfBull_T2, ltfBear_H2, ltfBear_L2, ltfBear_T2)
-    checkTickerAlerts(t3, vBull3, vBear3, h2_3, l2_3, t2_3, c3, h3, l3, ltfBull_H3, ltfBull_L3, ltfBull_T3, ltfBear_H3, ltfBear_L3, ltfBear_T3)
-    checkTickerAlerts(t4, vBull4, vBear4, h2_4, l2_4, t2_4, c4, h4, l4, ltfBull_H4, ltfBull_L4, ltfBull_T4, ltfBear_H4, ltfBear_L4, ltfBear_T4)
-    checkTickerAlerts(t5, vBull5, vBear5, h2_5, l2_5, t2_5, c5, h5, l5, ltfBull_H5, ltfBull_L5, ltfBull_T5, ltfBear_H5, ltfBear_L5, ltfBear_T5)
-    checkTickerAlerts(t6, vBull6, vBear6, h2_6, l2_6, t2_6, c6, h6, l6, ltfBull_H6, ltfBull_L6, ltfBull_T6, ltfBear_H6, ltfBear_L6, ltfBear_T6)
-    checkTickerAlerts(t7, vBull7, vBear7, h2_7, l2_7, t2_7, c7, h7, l7, ltfBull_H7, ltfBull_L7, ltfBull_T7, ltfBear_H7, ltfBear_L7, ltfBear_T7)
 
 // ---- Draw on last confirmed / realtime bar ----
 if barstate.islastconfirmedhistory or barstate.islast
