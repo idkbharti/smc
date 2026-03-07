@@ -299,6 +299,8 @@ showSwingOBInput    = input.bool(true,  "Show Swing OBs",        group = grpOB, 
 swingOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, inline = "sob", minval = 0, maxval = 10)
 showInternalOBInput = input.bool(true,  "Show Internal OBs",     group = grpOB, inline = "iob")
 internalOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, inline = "iob", minval = 0, maxval = 10)
+filterMitigatedAreaInput= input.bool(true,  "Filter Mitigated Area", group = grpOB, tooltip="If enabled, partially mitigated OBs are drawn as an outline with only the remaining unmitigated area filled.")
+hideMitigatedOBInput= input.bool(false, "Hide Partially Mitigated OBs", group = grpOB, tooltip="If YES, partially mitigated OBs are fully hidden from the chart.")
 showRefinedOBInput  = input.bool(true,  "Show Refined OB",       group = grpOB, tooltip="Automatically refines OBs to lower timeframes: (5m->3m), (3m->1m), (15m->5m), (1H->15m), (1D->1H).")
 showDeepRefinedInput= input.bool(false, "Deep Nested Refinement", group = grpOB, tooltip="If YES, refines TWICE if possible: 5m->3m->1m, 15m->5m->3m, 1H->15m->5m or 1D->1H->15m (Primary Chart ONLY).")
 alertRefinedOBInput = input.bool(false, "Alert when Refined OB is Tapped", group = grpOB, tooltip="Triggers a TradingView alert whenever price first taps a Refined OB. Use 'Any alert() function call' in your TV alert settings.")
@@ -323,8 +325,10 @@ obMitigationInput   = input.string("High/Low", "OB Mitigation",  group = grpOB, 
 
 swingBullOBColor    = input.color(color.new(#1848cc, 93), "Swing Bullish OB",   group = grpOB)
 swingBearOBColor    = input.color(color.new(#b22833, 93), "Swing Bearish OB",   group = grpOB)
+swingMitOBColor     = input.color(color.new(color.gray, 88), "Swing Mitigated OB",group = grpOB)
 intBullOBColor      = input.color(color.new(#3179f5, 93), "Internal Bullish OB",group = grpOB)
 intBearOBColor      = input.color(color.new(#f77c80, 93), "Internal Bearish OB",group = grpOB)
+intMitOBColor       = input.color(color.new(color.gray, 88), "Internal Mitigated OB",group = grpOB)
 
 //-----------------------------------------------------------------------------
 // OB Type
@@ -340,6 +344,8 @@ type orderBlock
     int   mitigationTime = 0 // time when the OB was mitigated
     bool  isRefined = false
     string refinedTag = ""
+    float currentHigh = 0.0
+    float currentLow = 0.0
 
 //-----------------------------------------------------------------------------
 // OB Storage Arrays
@@ -353,6 +359,8 @@ var array<orderBlock> deepRefinedOBs = array.new<orderBlock>()
 // Parallel arrays of boxes AND labels for efficient `set_*` updates (created once at bar 0)
 var array<box>   swingOBBoxes    = array.new<box>()
 var array<box>   internalOBBoxes = array.new<box>()
+var array<box>   swingOBInner    = array.new<box>()
+var array<box>   internalOBInner = array.new<box>()
 var array<label> swingOBLabels    = array.new<label>()
 var array<label> internalOBLabels = array.new<label>()
 
@@ -445,8 +453,13 @@ deleteOBs(int obType) =>
                 obs.remove(i)
             // Partial mitigation: price entered the OB zone (above low, not yet above high)
             else if ob_bearMitigationSrc > ob.barLow
-                if not ob.partial and ob.isRefined and alertRefinedOBInput
-                    alert("Bearish Refined OB Tapped on " + syminfo.tickerid + " (" + ob.refinedTag + ")", alert.freq_once_per_bar_close)
+                if not ob.partial
+                    if ob.isRefined and alertRefinedOBInput
+                        alert("Bearish Refined OB Tapped on " + syminfo.tickerid + " (" + ob.refinedTag + ")", alert.freq_once_per_bar_close)
+                    ob.currentHigh := ob.barHigh
+                    ob.currentLow := ob_bearMitigationSrc
+                else
+                    ob.currentLow := math.max(ob.currentLow, ob_bearMitigationSrc)
                 ob.partial := true
 
         else if ob.bias == BULLISH
@@ -455,8 +468,13 @@ deleteOBs(int obType) =>
                 obs.remove(i)
             // Partial mitigation: price entered the OB zone (below high, not yet below low)
             else if ob_bullMitigationSrc < ob.barHigh
-                if not ob.partial and ob.isRefined and alertRefinedOBInput
-                    alert("Bullish Refined OB Tapped on " + syminfo.tickerid + " (" + ob.refinedTag + ")", alert.freq_once_per_bar_close)
+                if not ob.partial
+                    if ob.isRefined and alertRefinedOBInput
+                        alert("Bullish Refined OB Tapped on " + syminfo.tickerid + " (" + ob.refinedTag + ")", alert.freq_once_per_bar_close)
+                    ob.currentHigh := ob_bullMitigationSrc
+                    ob.currentLow := ob.barLow
+                else
+                    ob.currentHigh := math.min(ob.currentHigh, ob_bullMitigationSrc)
                 ob.partial := true
 
         i -= 1
@@ -467,6 +485,7 @@ deleteOBs(int obType) =>
 drawOBs(int obType) =>
     array<orderBlock> obs    = obType == 1 ? internalOBs : swingOBs
     array<box>        boxes  = obType == 1 ? internalOBBoxes : swingOBBoxes
+    array<box>        inner  = obType == 1 ? internalOBInner : swingOBInner
     array<label>      labels = obType == 1 ? internalOBLabels : swingOBLabels
     int outsideOBMax         = obType == 1 ? internalOBOutsideCountInput : swingOBOutsideCountInput
     int obsSize              = obs.size()
@@ -489,15 +508,21 @@ drawOBs(int obType) =>
 
         // obs is sorted newest-first; iterate all
         for ob in obs
-            ob_inZone = ob.barLow < zoneTop and ob.barHigh > zoneBottom
-            if ob_inZone
-                inRange.push(ob)
-            else if ob.barLow >= zoneTop
-                // OB is above range — collect them
-                aboveOBs.push(ob)
-            else if ob.barHigh <= zoneBottom
-                // OB is below range — collect them
-                belowOBs.push(ob)
+            // Apply custom display filters
+            bool skipOB = false
+            if hideMitigatedOBInput and ob.partial
+                skipOB := true
+
+            if not skipOB
+                ob_inZone = ob.barLow < zoneTop and ob.barHigh > zoneBottom
+                if ob_inZone
+                    inRange.push(ob)
+                else if ob.barLow >= zoneTop
+                    // OB is above range — collect them
+                    aboveOBs.push(ob)
+                else if ob.barHigh <= zoneBottom
+                    // OB is below range — collect them
+                    belowOBs.push(ob)
 
         // Sort above/below to find the closest ones
         // Above OBs: closest means lowest barLow. We want ascending order of barLow.
@@ -559,30 +584,52 @@ drawOBs(int obType) =>
         if currentBoxCount > visibleCount
             for i = currentBoxCount - 1 to visibleCount
                 box.delete(boxes.pop())
+                box.delete(inner.pop())
                 label.delete(labels.pop())
         // Add needed boxes
         else if currentBoxCount < visibleCount
             for i = currentBoxCount to visibleCount - 1
                 boxes.push(box.new(na, na, na, na, xloc = xloc.bar_time))
+                inner.push(box.new(na, na, na, na, xloc = xloc.bar_time))
                 labels.push(label.new(na, na, text = "", xloc = xloc.bar_time,
                      color = color(na), style = label.style_label_left,
                      textcolor = color.gray, size = size.tiny))
 
         // Iterate and render everything dynamically matched 1:1 with visible OBs
         for [idx, ob] in visible
-            // Partially mitigated OBs turn grey; active OBs keep their bias colour
+            // Partially mitigated OBs take their specific mitigated colour; active OBs keep their bias colour
             color c = ob.partial
-                 ? color.new(color.gray, 88)   // light grey = touched but not broken
+                 ? (obType == 1 ? intMitOBColor : swingMitOBColor)
                  : obType == 1
                       ? (ob.bias == BEARISH ? intBearOBColor  : intBullOBColor)
                       : (ob.bias == BEARISH ? swingBearOBColor : swingBullOBColor)
 
             // ── Box ──────────────────────────────────────────────────────────
             box b = boxes.get(idx)
-            b.set_top_left_point(     chart.point.new(ob.barTime, na, ob.barHigh))
-            b.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.barLow))
-            b.set_border_color(obType == 1 ? na : c)
-            b.set_bgcolor(c)
+            box inB = inner.get(idx)
+            
+            if ob.partial and filterMitigatedAreaInput
+                // Draw Full Box as Outline
+                b.set_top_left_point(     chart.point.new(ob.barTime, na, ob.barHigh))
+                b.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.barLow))
+                b.set_border_color(c)
+                b.set_bgcolor(color(na))
+                
+                // Draw Remaining Area as Fill
+                inB.set_top_left_point(     chart.point.new(ob.barTime, na, ob.currentHigh))
+                inB.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.currentLow))
+                inB.set_border_color(na)
+                inB.set_bgcolor(c)
+            else
+                // Draw normal Full Box with Fill
+                b.set_top_left_point(     chart.point.new(ob.barTime, na, ob.barHigh))
+                b.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.barLow))
+                b.set_border_color(obType == 1 ? na : c)
+                b.set_bgcolor(c)
+                
+                // Hide Inner Box
+                inB.set_top_left_point(     chart.point.new(na, na, na))
+                inB.set_bottom_right_point( chart.point.new(na, na, na))
 
             // ── Label: vertically centered on the right inside the OB box ───────────────────────────
             string ob_tag = ob.isRefined ? ob.refinedTag : tf_tag
@@ -592,7 +639,10 @@ drawOBs(int obType) =>
             lbl.set_xy(ob_rightTime, ob_midY)       // anchor = right edge, vertically centered
             lbl.set_text(ob_tag)
             lbl.set_style(label.style_label_right)  // body is LEFT of anchor → inside box
-            lbl.set_textcolor(color.new(ob.bias == BULLISH ? color.blue : color.red, 30))
+            color txtC = ob.partial
+                 ? color.new(obType == 1 ? intMitOBColor : swingMitOBColor, 0)
+                 : color.new(ob.bias == BULLISH ? color.blue : color.red, 30)
+            lbl.set_textcolor(txtC)
             lbl.set_size(size.small)
 
 //=============================================================================
