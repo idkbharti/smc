@@ -4,7 +4,7 @@ indicator('Advanced Pine', 'Advanced Pine', overlay = true, max_labels_count = 5
 //-----------------------------------------------------------------------------
 // Inputs
 //-----------------------------------------------------------------------------
-insideColor             = input.color(color.new(color.blue, 0), "Inside Candle Color")
+insideColor             = input.color(color.new(color.blue, 100), "Inside Candle Color")
 showStructureInput      = input(true, "Show Swing Structure")
 showHighLowSwingsInput  = input(true, "Show Strong/Weak High/Low")
 
@@ -193,9 +193,9 @@ displayStructure()
 //-----------------------------------------------------------------------------
 var line highLine       = line.new(na, na, na, na, xloc=xloc.bar_time, color=COLOR_BLACK)
 var line lowLine        = line.new(na, na, na, na, xloc=xloc.bar_time, color=COLOR_BLACK)
-// style_label_lower_right: anchor is the right end of the line; text extends LEFT → visually end-aligned
-var label highLabel     = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na), textcolor=COLOR_BLACK, style=label.style_label_lower_right, size=size.small)
-var label lowLabel      = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na), textcolor=COLOR_BLACK, style=label.style_label_upper_right, size=size.small)
+// style_label_down / style_label_up: anchors are centered over/under the coordinate
+var label highLabel     = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na), textcolor=COLOR_BLACK, style=label.style_label_down, size=size.small)
+var label lowLabel      = label.new(na, na, text="", xloc=xloc.bar_time, color=color(na), textcolor=COLOR_BLACK, style=label.style_label_up, size=size.small)
 
 if showHighLowSwingsInput
     barDuration  = time - time[1]
@@ -207,7 +207,7 @@ if showHighLowSwingsInput
         line.set_xy1(highLine,    trailing.lastTopTime, trailing.top)
         line.set_xy2(highLine,    rightTimeBar, trailing.top)
         line.set_style(highLine,  isStrongHigh ? line.style_solid : line.style_dashed)
-        label.set_xy(highLabel,   rightTimeBar, trailing.top)
+        label.set_xy(highLabel,   math.round((trailing.lastTopTime + rightTimeBar) / 2), trailing.top)
         label.set_text(highLabel, (isStrongHigh ? 'Strong High' : 'Weak High') + ' · ' + tf_str)
 
     if not na(trailing.bottom)
@@ -215,7 +215,7 @@ if showHighLowSwingsInput
         line.set_xy1(lowLine,    trailing.lastBottomTime, trailing.bottom)
         line.set_xy2(lowLine,    rightTimeBar, trailing.bottom)
         line.set_style(lowLine,  isStrongLow ? line.style_solid : line.style_dashed)
-        label.set_xy(lowLabel,   rightTimeBar, trailing.bottom)
+        label.set_xy(lowLabel,   math.round((trailing.lastBottomTime + rightTimeBar) / 2), trailing.bottom)
         label.set_text(lowLabel, (isStrongLow ? 'Strong Low' : 'Weak Low') + ' · ' + tf_str)
 
 //-----------------------------------------------------------------------------
@@ -299,22 +299,10 @@ showSwingOBInput    = input.bool(true,  "Show Swing OBs",        group = grpOB, 
 swingOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, inline = "sob", minval = 0, maxval = 10)
 showInternalOBInput = input.bool(true,  "Show Internal OBs",     group = grpOB, inline = "iob")
 internalOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, inline = "iob", minval = 0, maxval = 10)
-filterMitigatedAreaInput= input.bool(true,  "Filter Mitigated Area", group = grpOB, tooltip="If enabled, partially mitigated OBs are drawn as an outline with only the remaining unmitigated area filled.")
 hideMitigatedOBInput= input.bool(false, "Hide Partially Mitigated OBs", group = grpOB, tooltip="If YES, partially mitigated OBs are fully hidden from the chart.")
-showRefinedOBInput  = input.bool(true,  "Show Refined OB",       group = grpOB, tooltip="Automatically refines OBs to lower timeframes: (5m->3m), (3m->1m), (15m->5m), (1H->15m), (1D->1H).")
-showDeepRefinedInput= input.bool(false, "Deep Nested Refinement", group = grpOB, tooltip="If YES, refines TWICE if possible: 5m->3m->1m, 15m->5m->3m, 1H->15m->5m or 1D->1H->15m (Primary Chart ONLY).")
-alertRefinedOBInput = input.bool(false, "Alert when Refined OB is Tapped", group = grpOB, tooltip="Triggers a TradingView alert whenever price first taps a Refined OB. Use 'Any alert() function call' in your TV alert settings.")
-
 //-----------------------------------------------------------------------------
-// Screener Inputs (Bypass Free Tier Limits)
+// Screener Inputs Removed for Optimization
 //-----------------------------------------------------------------------------
-grpScreener = "Screener (Multi-Ticker Alerts)"
-enableScreener = input.bool(false, "Enable Multi-Ticker Alerts", group = grpScreener, tooltip = "When ON, it scans these 5 symbols in the background and sends alerts for all of them using JUST ONE TradingView alert.")
-t1 = input.symbol("EURUSD", "Ticker 1", group = grpScreener)
-t2 = input.symbol("GBPUSD", "Ticker 2", group = grpScreener)
-t3 = input.symbol("USDJPY", "Ticker 3", group = grpScreener)
-t4 = input.symbol("AUDUSD", "Ticker 4", group = grpScreener)
-t5 = input.symbol("USDCAD", "Ticker 5", group = grpScreener)
 
 obTrendFilterInput  = input.bool(false, "Filter OB by Trend",    group = grpOB, tooltip="If disabled, shows both Bullish and Bearish OBs regardless of the current trend.")
 
@@ -323,12 +311,26 @@ obFilterInput       = input.string("Atr", "OB Filter",           group = grpOB, 
 obMitigationInput   = input.string("High/Low", "OB Mitigation",  group = grpOB, options = ["Close","High/Low"],
      tooltip = "Price source used to determine when an OB is invalidated (mitigated).")
 
-swingBullOBColor    = input.color(color.new(#1848cc, 93), "Swing Bullish OB",   group = grpOB)
-swingBearOBColor    = input.color(color.new(#b22833, 93), "Swing Bearish OB",   group = grpOB)
-swingMitOBColor     = input.color(color.new(color.gray, 88), "Swing Mitigated OB",group = grpOB)
-intBullOBColor      = input.color(color.new(#3179f5, 93), "Internal Bullish OB",group = grpOB)
-intBearOBColor      = input.color(color.new(#f77c80, 93), "Internal Bearish OB",group = grpOB)
-intMitOBColor       = input.color(color.new(color.gray, 88), "Internal Mitigated OB",group = grpOB)
+grpBull = "Bullish Shades"
+bull1 = input.color(color.new(#1848cc, 90), "Bullish 1 (Darkest)", group=grpBull)
+bull2 = input.color(color.new(#1848cc, 92), "Bullish 2", group=grpBull)
+bull3 = input.color(color.new(#1848cc, 94), "Bullish 3", group=grpBull)
+bull4 = input.color(color.new(#1848cc, 96), "Bullish 4", group=grpBull)
+bull5 = input.color(color.new(#1848cc, 98), "Bullish 5 (Lightest)", group=grpBull)
+
+grpBear = "Bearish Shades"
+bear1 = input.color(color.new(#b22833, 90), "Bearish 1 (Darkest)", group=grpBear)
+bear2 = input.color(color.new(#b22833, 92), "Bearish 2", group=grpBear)
+bear3 = input.color(color.new(#b22833, 94), "Bearish 3", group=grpBear)
+bear4 = input.color(color.new(#b22833, 96), "Bearish 4", group=grpBear)
+bear5 = input.color(color.new(#b22833, 98), "Bearish 5 (Lightest)", group=grpBear)
+
+grpMit = "Mitigated Shades"
+mit1 = input.color(color.new(color.gray, 85), "Mitigated 1 (Darkest/Border)", group=grpMit)
+mit2 = input.color(color.new(color.gray, 88), "Mitigated 2 (Fill)", group=grpMit)
+mit3 = input.color(color.new(color.gray, 92), "Mitigated 3", group=grpMit)
+mit4 = input.color(color.new(color.gray, 95), "Mitigated 4", group=grpMit)
+mit5 = input.color(color.new(color.gray, 98), "Mitigated 5 (Lightest)", group=grpMit)
 
 //-----------------------------------------------------------------------------
 // OB Type
@@ -346,6 +348,10 @@ type orderBlock
     string refinedTag = ""
     float currentHigh = 0.0
     float currentLow = 0.0
+    float oHigh = na
+    float oLow = na
+    float r1High = na
+    float r1Low = na
 
 //-----------------------------------------------------------------------------
 // OB Storage Arrays
@@ -363,6 +369,10 @@ var array<box>   swingOBInner    = array.new<box>()
 var array<box>   internalOBInner = array.new<box>()
 var array<label> swingOBLabels    = array.new<label>()
 var array<label> internalOBLabels = array.new<label>()
+var array<box>   swingOBorigBoxes    = array.new<box>()
+var array<box>   swingOBref1Boxes    = array.new<box>()
+var array<box>   internalOBorigBoxes = array.new<box>()
+var array<box>   internalOBref1Boxes = array.new<box>()
 
 // We now dynamically size arrays below as needed in drawOBs, 
 // so we don't prepopulate `_i to N` boxes and labels here anymore.
@@ -454,8 +464,6 @@ deleteOBs(int obType) =>
             // Partial mitigation: price entered the OB zone (above low, not yet above high)
             else if ob_bearMitigationSrc > ob.barLow
                 if not ob.partial
-                    if ob.isRefined and alertRefinedOBInput
-                        alert("Bearish Refined OB Tapped on " + syminfo.tickerid + " (" + ob.refinedTag + ")", alert.freq_once_per_bar_close)
                     ob.currentHigh := ob.barHigh
                     ob.currentLow := ob_bearMitigationSrc
                 else
@@ -469,8 +477,6 @@ deleteOBs(int obType) =>
             // Partial mitigation: price entered the OB zone (below high, not yet below low)
             else if ob_bullMitigationSrc < ob.barHigh
                 if not ob.partial
-                    if ob.isRefined and alertRefinedOBInput
-                        alert("Bullish Refined OB Tapped on " + syminfo.tickerid + " (" + ob.refinedTag + ")", alert.freq_once_per_bar_close)
                     ob.currentHigh := ob_bullMitigationSrc
                     ob.currentLow := ob.barLow
                 else
@@ -486,6 +492,8 @@ drawOBs(int obType) =>
     array<orderBlock> obs    = obType == 1 ? internalOBs : swingOBs
     array<box>        boxes  = obType == 1 ? internalOBBoxes : swingOBBoxes
     array<box>        inner  = obType == 1 ? internalOBInner : swingOBInner
+    array<box>        origBoxes = obType == 1 ? internalOBorigBoxes : swingOBorigBoxes
+    array<box>        ref1Boxes = obType == 1 ? internalOBref1Boxes : swingOBref1Boxes
     array<label>      labels = obType == 1 ? internalOBLabels : swingOBLabels
     int outsideOBMax         = obType == 1 ? internalOBOutsideCountInput : swingOBOutsideCountInput
     int obsSize              = obs.size()
@@ -585,51 +593,90 @@ drawOBs(int obType) =>
             for i = currentBoxCount - 1 to visibleCount
                 box.delete(boxes.pop())
                 box.delete(inner.pop())
+                box.delete(origBoxes.pop())
+                box.delete(ref1Boxes.pop())
                 label.delete(labels.pop())
         // Add needed boxes
         else if currentBoxCount < visibleCount
             for i = currentBoxCount to visibleCount - 1
                 boxes.push(box.new(na, na, na, na, xloc = xloc.bar_time))
                 inner.push(box.new(na, na, na, na, xloc = xloc.bar_time))
+                origBoxes.push(box.new(na, na, na, na, xloc = xloc.bar_time))
+                ref1Boxes.push(box.new(na, na, na, na, xloc = xloc.bar_time))
                 labels.push(label.new(na, na, text = "", xloc = xloc.bar_time,
                      color = color(na), style = label.style_label_left,
                      textcolor = color.gray, size = size.tiny))
 
         // Iterate and render everything dynamically matched 1:1 with visible OBs
         for [idx, ob] in visible
-            // Partially mitigated OBs take their specific mitigated colour; active OBs keep their bias colour
-            color c = ob.partial
-                 ? (obType == 1 ? intMitOBColor : swingMitOBColor)
-                 : obType == 1
-                      ? (ob.bias == BEARISH ? intBearOBColor  : intBullOBColor)
-                      : (ob.bias == BEARISH ? swingBearOBColor : swingBullOBColor)
+            // ── Colors ───────────────────────────────────────────────────────
+            // Grab the active alignment array
+            color c1 = ob.bias == BULLISH ? bull1 : bear1
+            color c2 = ob.bias == BULLISH ? bull2 : bear2
+            color c3 = ob.bias == BULLISH ? bull3 : bear3
+            color c4 = ob.bias == BULLISH ? bull4 : bear4
+            color c5 = ob.bias == BULLISH ? bull5 : bear5
+
+            // Determine if internal or swing for the active OB shift
+            color outer2 = obType == 1 ? c5 : c4
+            color outer1 = obType == 1 ? c4 : c3
+            color base  = obType == 1 ? c3 : c2
+            color core  = obType == 1 ? c2 : c1
 
             // ── Box ──────────────────────────────────────────────────────────
             box b = boxes.get(idx)
             box inB = inner.get(idx)
             
-            if ob.partial and filterMitigatedAreaInput
-                // Draw Full Box as Outline
+            if ob.partial
+                // Draw Full Box as a Hollow Border using Mitigated Shades
                 b.set_top_left_point(     chart.point.new(ob.barTime, na, ob.barHigh))
                 b.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.barLow))
-                b.set_border_color(c)
+                b.set_border_color(mit1)
                 b.set_bgcolor(color(na))
                 
-                // Draw Remaining Area as Fill
+                // Draw Remaining Area as full Fill
                 inB.set_top_left_point(     chart.point.new(ob.barTime, na, ob.currentHigh))
                 inB.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.currentLow))
                 inB.set_border_color(na)
-                inB.set_bgcolor(c)
+                inB.set_bgcolor(mit2)
             else
                 // Draw normal Full Box with Fill
                 b.set_top_left_point(     chart.point.new(ob.barTime, na, ob.barHigh))
                 b.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.barLow))
-                b.set_border_color(obType == 1 ? na : c)
-                b.set_bgcolor(c)
+                b.set_border_color(na)
+                b.set_bgcolor(base)
                 
                 // Hide Inner Box
                 inB.set_top_left_point(     chart.point.new(na, na, na))
                 inB.set_bottom_right_point( chart.point.new(na, na, na))
+
+            // ── Outer Bounds Borders ──────────────────────────────────────────
+            box oB = origBoxes.get(idx)
+            box r1B = ref1Boxes.get(idx)
+
+            if not na(ob.oHigh) and ob.oHigh != ob.barHigh
+                oB.set_top_left_point(     chart.point.new(ob.barTime, na, ob.oHigh))
+                oB.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.oLow))
+                oB.set_border_color(na)
+                if ob.partial
+                    oB.set_bgcolor(mit5)
+                else
+                    oB.set_bgcolor(outer2)
+            else
+                oB.set_top_left_point(     chart.point.new(na, na, na))
+                oB.set_bottom_right_point( chart.point.new(na, na, na))
+
+            if not na(ob.r1High) and ob.r1High != ob.barHigh
+                r1B.set_top_left_point(     chart.point.new(ob.barTime, na, ob.r1High))
+                r1B.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.r1Low))
+                r1B.set_border_color(na)
+                if ob.partial
+                    r1B.set_bgcolor(mit4)
+                else
+                    r1B.set_bgcolor(outer1)
+            else
+                r1B.set_top_left_point(     chart.point.new(na, na, na))
+                r1B.set_bottom_right_point( chart.point.new(na, na, na))
 
             // ── Label: vertically centered on the right inside the OB box ───────────────────────────
             string ob_tag = ob.isRefined ? ob.refinedTag : tf_tag
@@ -640,7 +687,7 @@ drawOBs(int obType) =>
             lbl.set_text(ob_tag)
             lbl.set_style(label.style_label_right)  // body is LEFT of anchor → inside box
             color txtC = ob.partial
-                 ? color.new(obType == 1 ? intMitOBColor : swingMitOBColor, 0)
+                 ? color.new(mit1, 0)
                  : color.new(ob.bias == BULLISH ? color.blue : color.red, 30)
             lbl.set_textcolor(txtC)
             lbl.set_size(size.small)
@@ -727,7 +774,7 @@ calcLTF_OB_Data(int size) =>
 [ltf2Bull_H, ltf2Bull_L, ltf2Bull_T, ltf2Bear_H, ltf2Bear_L, ltf2Bear_T] = request.security(syminfo.tickerid, hasAutoLtf2 ? autoLtf2Str : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
 
 
-if hasAutoLtf and showRefinedOBInput
+if hasAutoLtf
     if not na(ltfBull_T)
         bool exists = false
         if refinedOBs.size() > 0
@@ -748,7 +795,7 @@ if hasAutoLtf and showRefinedOBInput
             if refinedOBs.size() >= 100
                 refinedOBs.pop()
 
-if showDeepRefinedInput and hasAutoLtf2
+if hasAutoLtf2
     if not na(ltf2Bull_T)
         bool exists = false
         if deepRefinedOBs.size() > 0
@@ -777,9 +824,16 @@ int bullT = time[2]
 bool bullRefined = false
 string bullTag = tf_tag
 
-if validBullOB and hasAutoLtf and showRefinedOBInput
+float bull_oH = high[2]
+float bull_oL = low[2]
+float bull_r1H = na
+float bull_r1L = na
+
+if validBullOB and hasAutoLtf
     for ref in refinedOBs
         if ref.bias == BULLISH and ref.barHigh <= bullH and ref.barLow >= bullL and ref.barTime >= bullT
+            bull_r1H := ref.barHigh
+            bull_r1L := ref.barLow
             bullH := ref.barHigh
             bullL := ref.barLow
             bullT := ref.barTime
@@ -787,7 +841,7 @@ if validBullOB and hasAutoLtf and showRefinedOBInput
             bullTag := tf_tag + "+" + formatTF(autoLtfStr)
             
             // Nested Level 2 Check
-            if showDeepRefinedInput and hasAutoLtf2
+            if hasAutoLtf2
                 for deepRef in deepRefinedOBs
                     if deepRef.bias == BULLISH and deepRef.barHigh <= bullH and deepRef.barLow >= bullL and deepRef.barTime >= bullT
                         bullH := deepRef.barHigh
@@ -802,6 +856,10 @@ if validBullOB and showSwingOBInput
     ob_entry = orderBlock.new(bullH, bullL, bullT, BULLISH)
     ob_entry.isRefined := bullRefined
     ob_entry.refinedTag := bullTag
+    ob_entry.oHigh  := bull_oH
+    ob_entry.oLow   := bull_oL
+    ob_entry.r1High := bull_r1H
+    ob_entry.r1Low  := bull_r1L
     if swingOBs.size() >= 100
         swingOBs.pop()
     swingOBs.unshift(ob_entry)
@@ -813,9 +871,16 @@ int bearT = time[2]
 bool bearRefined = false
 string bearTag = tf_tag
 
-if validBearOB and hasAutoLtf and showRefinedOBInput
+float bear_oH = high[2]
+float bear_oL = low[2]
+float bear_r1H = na
+float bear_r1L = na
+
+if validBearOB and hasAutoLtf
     for ref in refinedOBs
         if ref.bias == BEARISH and ref.barHigh <= bearH and ref.barLow >= bearL and ref.barTime >= bearT
+            bear_r1H := ref.barHigh
+            bear_r1L := ref.barLow
             bearH := ref.barHigh
             bearL := ref.barLow
             bearT := ref.barTime
@@ -823,7 +888,7 @@ if validBearOB and hasAutoLtf and showRefinedOBInput
             bearTag := tf_tag + "+" + formatTF(autoLtfStr)
             
             // Nested Level 2 Check
-            if showDeepRefinedInput and hasAutoLtf2
+            if hasAutoLtf2
                 for deepRef in deepRefinedOBs
                     if deepRef.bias == BEARISH and deepRef.barHigh <= bearH and deepRef.barLow >= bearL and deepRef.barTime >= bearT
                         bearH := deepRef.barHigh
@@ -838,6 +903,10 @@ if validBearOB and showSwingOBInput
     ob_entry = orderBlock.new(bearH, bearL, bearT, BEARISH)
     ob_entry.isRefined := bearRefined
     ob_entry.refinedTag := bearTag
+    ob_entry.oHigh  := bear_oH
+    ob_entry.oLow   := bear_oL
+    ob_entry.r1High := bear_r1H
+    ob_entry.r1Low  := bear_r1L
     if swingOBs.size() >= 100
         swingOBs.pop()
     swingOBs.unshift(ob_entry)
@@ -850,55 +919,8 @@ if showInternalOBInput
     deleteOBs(1)
 
 //=============================================================================
-// SCREENER LOGIC — Scan multiple tickers to bypass TV free alert limits
+// SCREENER LOGIC REMOVED
 //=============================================================================
-
-// Helper to evaluate the pre-fetched data and fire alerts
-checkTickerAlerts(string ticker, bool vBull, bool vBear, float h2, float l2, int t2, float c, float h, float l, float ltfBull_H, float ltfBull_L, int ltfBull_T, float ltfBear_H, float ltfBear_L, int ltfBear_T) =>
-    bool alertTriggered = false
-    if ticker != ""
-        // This is a simplified stateless alert check specifically built to fire when an OB
-        // is first tapped. It evaluates if the *current* bar's high/low is penetrating the established OB.
-        
-        if vBear and not na(ltfBear_H)
-            // If Bearish OB exists and current High breaks the refined Low (tap)
-            if h > ltfBear_L and c < ltfBear_H
-                alert("Bearish Refined OB Tapped on " + ticker + " (" + tf_tag + "+" + formatTF(autoLtfStr) + ")", alert.freq_once_per_bar_close)
-                alertTriggered := true
-
-        if vBull and not na(ltfBull_L)
-            // If Bullish OB exists and current Low breaks the refined High (tap)
-            if l < ltfBull_H and c > ltfBull_L
-                alert("Bullish Refined OB Tapped on " + ticker + " (" + tf_tag + "+" + formatTF(autoLtfStr) + ")", alert.freq_once_per_bar_close)
-                alertTriggered := true
-    alertTriggered
-
-// T1
-[vBull1, vBear1, h2_1, l2_1, t2_1, c1, h1, l1] = request.security(t1, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H1, ltfBull_L1, ltfBull_T1, ltfBear_H1, ltfBear_L1, ltfBear_T1] = request.security(t1, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T2
-[vBull2, vBear2, h2_2, l2_2, t2_2, c2, h2_h, l2_l] = request.security(t2, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H2, ltfBull_L2, ltfBull_T2, ltfBear_H2, ltfBear_L2, ltfBear_T2] = request.security(t2, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T3
-[vBull3, vBear3, h2_3, l2_3, t2_3, c3, h3, l3] = request.security(t3, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H3, ltfBull_L3, ltfBull_T3, ltfBear_H3, ltfBear_L3, ltfBear_T3] = request.security(t3, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T4
-[vBull4, vBear4, h2_4, l2_4, t2_4, c4, h4, l4] = request.security(t4, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H4, ltfBull_L4, ltfBull_T4, ltfBear_H4, ltfBear_L4, ltfBear_T4] = request.security(t4, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T5
-[vBull5, vBear5, h2_5, l2_5, t2_5, c5, h5, l5] = request.security(t5, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H5, ltfBull_L5, ltfBull_T5, ltfBear_H5, ltfBear_L5, ltfBear_T5] = request.security(t5, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-if enableScreener and alertRefinedOBInput
-    checkTickerAlerts(t1, vBull1, vBear1, h2_1, l2_1, t2_1, c1, h1, l1, ltfBull_H1, ltfBull_L1, ltfBull_T1, ltfBear_H1, ltfBear_L1, ltfBear_T1)
-    checkTickerAlerts(t2, vBull2, vBear2, h2_2, l2_2, t2_2, c2, h2_h, l2_l, ltfBull_H2, ltfBull_L2, ltfBull_T2, ltfBear_H2, ltfBear_L2, ltfBear_T2)
-    checkTickerAlerts(t3, vBull3, vBear3, h2_3, l2_3, t2_3, c3, h3, l3, ltfBull_H3, ltfBull_L3, ltfBull_T3, ltfBear_H3, ltfBear_L3, ltfBear_T3)
-    checkTickerAlerts(t4, vBull4, vBear4, h2_4, l2_4, t2_4, c4, h4, l4, ltfBull_H4, ltfBull_L4, ltfBull_T4, ltfBear_H4, ltfBear_L4, ltfBear_T4)
-    checkTickerAlerts(t5, vBull5, vBear5, h2_5, l2_5, t2_5, c5, h5, l5, ltfBull_H5, ltfBull_L5, ltfBull_T5, ltfBear_H5, ltfBear_L5, ltfBear_T5)
 
 // ---- Draw on last confirmed / realtime bar ----
 if barstate.islastconfirmedhistory or barstate.islast
@@ -906,3 +928,45 @@ if barstate.islastconfirmedhistory or barstate.islast
         drawOBs(0)
     if showInternalOBInput
         drawOBs(1)
+
+//=============================================================================
+// CANDLESTICK PATTERN HIGHLIGHTING
+//=============================================================================
+grpPat = "Candle Patterns"
+showPatternsInput = input.bool(false, "Highlight Hammer + Shooting Star Patterns", group = grpPat)
+
+// ── Current candle (bar[0]) ───────────────────────────────────────────────
+float pat_body0      = math.abs(close - open)
+float pat_range0     = high - low
+float pat_lowerWick0 = math.min(open, close) - low
+float pat_upperWick0 = high - math.max(open, close)
+
+bool isHammerNow       = pat_range0 > 0 and pat_body0 > 0 and pat_lowerWick0 > 2 * pat_body0 and pat_upperWick0 < pat_body0
+
+bool isShootingStarNow = pat_range0 > 0 and pat_body0 > 0 and pat_upperWick0 > 2 * pat_body0 and pat_lowerWick0 < pat_body0
+
+// ── Previous candle (bar[1]) ──────────────────────────────────────────────
+float pat_body1      = math.abs(close[1] - open[1])
+float pat_range1     = high[1] - low[1]
+float pat_lowerWick1 = math.min(open[1], close[1]) - low[1]
+float pat_upperWick1 = high[1] - math.max(open[1], close[1])
+
+bool isHammerPrev       = pat_range1 > 0 and pat_body1 > 0 and pat_lowerWick1 > 2 * pat_body1 and pat_upperWick1 < pat_body1
+
+bool isShootingStarPrev = pat_range1 > 0 and pat_body1 > 0 and pat_upperWick1 > 2 * pat_body1 and pat_lowerWick1 < pat_body1
+
+// ── COLORING ──────────────────────────────────────────────────────────────
+// Signal candle colored immediately when it forms (no waiting).
+// If the next candle confirms direction, that candle is also colored.
+
+// Hammer → GREEN as soon as it appears
+barcolor(showPatternsInput and isHammerNow ? color.green : na, title = "Hammer")
+
+// Bullish follow-through after hammer → also GREEN
+barcolor(showPatternsInput and isHammerPrev and close > open ? color.green : na, title = "Bullish Confirm")
+
+// Shooting Star → RED as soon as it appears
+barcolor(showPatternsInput and isShootingStarNow ? color.red : na, title = "Shooting Star")
+
+// Bearish follow-through after shooting star → also RED
+barcolor(showPatternsInput and isShootingStarPrev and close < open ? color.red : na, title = "Bearish Confirm")
