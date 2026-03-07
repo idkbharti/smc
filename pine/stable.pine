@@ -97,6 +97,8 @@ formatTF(string tf) =>
 
 getAutoLTF() =>
     switch timeframe.period
+        "3"   => "1"
+        "5"   => "3"
         "15"  => "5"
         "60"  => "15"
         "D"   => "60"
@@ -297,7 +299,8 @@ showSwingOBInput    = input.bool(true,  "Show Swing OBs",        group = grpOB, 
 swingOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, inline = "sob", minval = 0, maxval = 10)
 showInternalOBInput = input.bool(true,  "Show Internal OBs",     group = grpOB, inline = "iob")
 internalOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, inline = "iob", minval = 0, maxval = 10)
-showRefinedOBInput  = input.bool(true,  "Show Refined OB",       group = grpOB, tooltip="Automatically refines OBs to lower timeframes: (15m->5m), (1H->15m), (1D->1H).")
+showRefinedOBInput  = input.bool(true,  "Show Refined OB",       group = grpOB, tooltip="Automatically refines OBs to lower timeframes: (5m->3m), (3m->1m), (15m->5m), (1H->15m), (1D->1H).")
+showDeepRefinedInput= input.bool(false, "Deep Nested Refinement", group = grpOB, tooltip="If YES, refines TWICE if possible: 5m->3m->1m, 15m->5m->3m, 1H->15m->5m or 1D->1H->15m (Primary Chart ONLY).")
 alertRefinedOBInput = input.bool(false, "Alert when Refined OB is Tapped", group = grpOB, tooltip="Triggers a TradingView alert whenever price first taps a Refined OB. Use 'Any alert() function call' in your TV alert settings.")
 
 //-----------------------------------------------------------------------------
@@ -310,8 +313,6 @@ t2 = input.symbol("GBPUSD", "Ticker 2", group = grpScreener)
 t3 = input.symbol("USDJPY", "Ticker 3", group = grpScreener)
 t4 = input.symbol("AUDUSD", "Ticker 4", group = grpScreener)
 t5 = input.symbol("USDCAD", "Ticker 5", group = grpScreener)
-t6 = input.symbol("BTCUSD", "Ticker 6", group = grpScreener)
-t7 = input.symbol("XAUUSD", "Ticker 7", group = grpScreener)
 
 obTrendFilterInput  = input.bool(false, "Filter OB by Trend",    group = grpOB, tooltip="If disabled, shows both Bullish and Bearish OBs regardless of the current trend.")
 
@@ -347,6 +348,7 @@ type orderBlock
 var array<orderBlock> swingOBs    = array.new<orderBlock>()
 var array<orderBlock> internalOBs = array.new<orderBlock>()
 var array<orderBlock> refinedOBs  = array.new<orderBlock>()
+var array<orderBlock> deepRefinedOBs = array.new<orderBlock>()
 
 // Parallel arrays of boxes AND labels for efficient `set_*` updates (created once at bar 0)
 var array<box>   swingOBBoxes    = array.new<box>()
@@ -631,6 +633,17 @@ validBearOB = ob_bearSweep and ob_bearFVG and (not obTrendFilterInput or swingTr
 autoLtfStr = getAutoLTF()
 hasAutoLtf = autoLtfStr != ""
 
+getAutoLTF2() =>
+    switch autoLtfStr
+        "3"  => "1"
+        "5"  => "3"
+        "15" => "5"
+        "60" => "15"
+        => ""
+
+autoLtf2Str = getAutoLTF2()
+hasAutoLtf2 = autoLtf2Str != ""
+
 calcLTF_OB_Data(int size) =>
     int tBias = calcTrendForSecurity(size)
     bool bullSweep = low[2] < low[3]
@@ -660,6 +673,10 @@ calcLTF_OB_Data(int size) =>
 
 [ltfBull_H, ltfBull_L, ltfBull_T, ltfBear_H, ltfBear_L, ltfBear_T] = request.security(syminfo.tickerid, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
 
+// SECONDARY CALL STRICTLY FOR MAIN CHART (to avoid memory limits across screener)
+[ltf2Bull_H, ltf2Bull_L, ltf2Bull_T, ltf2Bear_H, ltf2Bear_L, ltf2Bear_T] = request.security(syminfo.tickerid, hasAutoLtf2 ? autoLtf2Str : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
+
+
 if hasAutoLtf and showRefinedOBInput
     if not na(ltfBull_T)
         bool exists = false
@@ -681,6 +698,27 @@ if hasAutoLtf and showRefinedOBInput
             if refinedOBs.size() >= 100
                 refinedOBs.pop()
 
+if showDeepRefinedInput and hasAutoLtf2
+    if not na(ltf2Bull_T)
+        bool exists = false
+        if deepRefinedOBs.size() > 0
+            if deepRefinedOBs.get(0).barTime == ltf2Bull_T and deepRefinedOBs.get(0).bias == BULLISH
+                exists := true
+        if not exists
+            deepRefinedOBs.unshift(orderBlock.new(ltf2Bull_H, ltf2Bull_L, ltf2Bull_T, BULLISH))
+            if deepRefinedOBs.size() >= 100
+                deepRefinedOBs.pop()
+
+    if not na(ltf2Bear_T)
+        bool exists = false
+        if deepRefinedOBs.size() > 0
+            if deepRefinedOBs.get(0).barTime == ltf2Bear_T and deepRefinedOBs.get(0).bias == BEARISH
+                exists := true
+        if not exists
+            deepRefinedOBs.unshift(orderBlock.new(ltf2Bear_H, ltf2Bear_L, ltf2Bear_T, BEARISH))
+            if deepRefinedOBs.size() >= 100
+                deepRefinedOBs.pop()
+
 string tf_tag = formatTF(timeframe.period)
 
 float bullH = high[2]
@@ -697,6 +735,17 @@ if validBullOB and hasAutoLtf and showRefinedOBInput
             bullT := ref.barTime
             bullRefined := true
             bullTag := tf_tag + "+" + formatTF(autoLtfStr)
+            
+            // Nested Level 2 Check
+            if showDeepRefinedInput and hasAutoLtf2
+                for deepRef in deepRefinedOBs
+                    if deepRef.bias == BULLISH and deepRef.barHigh <= bullH and deepRef.barLow >= bullL and deepRef.barTime >= bullT
+                        bullH := deepRef.barHigh
+                        bullL := deepRef.barLow
+                        bullT := deepRef.barTime
+                        bullTag := bullTag + "+" + formatTF(autoLtf2Str)
+                        break
+                        
             break
 
 if validBullOB and showSwingOBInput
@@ -722,6 +771,17 @@ if validBearOB and hasAutoLtf and showRefinedOBInput
             bearT := ref.barTime
             bearRefined := true
             bearTag := tf_tag + "+" + formatTF(autoLtfStr)
+            
+            // Nested Level 2 Check
+            if showDeepRefinedInput and hasAutoLtf2
+                for deepRef in deepRefinedOBs
+                    if deepRef.bias == BEARISH and deepRef.barHigh <= bearH and deepRef.barLow >= bearL and deepRef.barTime >= bearT
+                        bearH := deepRef.barHigh
+                        bearL := deepRef.barLow
+                        bearT := deepRef.barTime
+                        bearTag := bearTag + "+" + formatTF(autoLtf2Str)
+                        break
+                        
             break
             
 if validBearOB and showSwingOBInput
@@ -783,22 +843,12 @@ checkTickerAlerts(string ticker, bool vBull, bool vBear, float h2, float l2, int
 [vBull5, vBear5, h2_5, l2_5, t2_5, c5, h5, l5] = request.security(t5, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
 [ltfBull_H5, ltfBull_L5, ltfBull_T5, ltfBear_H5, ltfBear_L5, ltfBear_T5] = request.security(t5, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
 
-// T6
-[vBull6, vBear6, h2_6, l2_6, t2_6, c6, h6, l6] = request.security(t6, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H6, ltfBull_L6, ltfBull_T6, ltfBear_H6, ltfBear_L6, ltfBear_T6] = request.security(t6, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
-// T7
-[vBull7, vBear7, h2_7, l2_7, t2_7, c7, h7, l7] = request.security(t7, timeframe.period, [validBullOB, validBearOB, high[2], low[2], time[2], close, high, low], lookahead = barmerge.lookahead_off)
-[ltfBull_H7, ltfBull_L7, ltfBull_T7, ltfBear_H7, ltfBear_L7, ltfBear_T7] = request.security(t7, hasAutoLtf ? autoLtfStr : timeframe.period, calcLTF_OB_Data(swingsLengthInput), lookahead = barmerge.lookahead_off)
-
 if enableScreener and alertRefinedOBInput
     checkTickerAlerts(t1, vBull1, vBear1, h2_1, l2_1, t2_1, c1, h1, l1, ltfBull_H1, ltfBull_L1, ltfBull_T1, ltfBear_H1, ltfBear_L1, ltfBear_T1)
     checkTickerAlerts(t2, vBull2, vBear2, h2_2, l2_2, t2_2, c2, h2_h, l2_l, ltfBull_H2, ltfBull_L2, ltfBull_T2, ltfBear_H2, ltfBear_L2, ltfBear_T2)
     checkTickerAlerts(t3, vBull3, vBear3, h2_3, l2_3, t2_3, c3, h3, l3, ltfBull_H3, ltfBull_L3, ltfBull_T3, ltfBear_H3, ltfBear_L3, ltfBear_T3)
     checkTickerAlerts(t4, vBull4, vBear4, h2_4, l2_4, t2_4, c4, h4, l4, ltfBull_H4, ltfBull_L4, ltfBull_T4, ltfBear_H4, ltfBear_L4, ltfBear_T4)
     checkTickerAlerts(t5, vBull5, vBear5, h2_5, l2_5, t2_5, c5, h5, l5, ltfBull_H5, ltfBull_L5, ltfBull_T5, ltfBear_H5, ltfBear_L5, ltfBear_T5)
-    checkTickerAlerts(t6, vBull6, vBear6, h2_6, l2_6, t2_6, c6, h6, l6, ltfBull_H6, ltfBull_L6, ltfBull_T6, ltfBear_H6, ltfBear_L6, ltfBear_T6)
-    checkTickerAlerts(t7, vBull7, vBear7, h2_7, l2_7, t2_7, c7, h7, l7, ltfBull_H7, ltfBull_L7, ltfBull_T7, ltfBear_H7, ltfBear_L7, ltfBear_T7)
 
 // ---- Draw on last confirmed / realtime bar ----
 if barstate.islastconfirmedhistory or barstate.islast
