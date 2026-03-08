@@ -1,55 +1,48 @@
 import pandas as pd
+import numpy as np
+import MetaTrader5 as mt5
+from datetime import datetime, timedelta
 import os
 
-try:
-    import MetaTrader5 as mt5
-    MT5_AVAILABLE = True
-except ImportError:
-    MT5_AVAILABLE = False
-    print("MetaTrader5 library not found. Running in Offline CSV Mode.")
+def generate_data(rows: int = 2000, start_price: float = 1.10) -> pd.DataFrame:
+    np.random.seed(99)
+    # Use the provided starting price
+    closes = np.cumprod(1 + np.random.normal(0, 0.0018, rows)) * start_price
+    start  = datetime(2025, 1, 1)
+    out    = []
+    for i in range(rows):
+        t = start + timedelta(minutes=15 * i)
+        c = closes[i]
+        o = closes[i-1] if i > 0 else c
+        h = max(o, c) + abs(np.random.normal(0, c * 0.0006))
+        l = min(o, c) - abs(np.random.normal(0, c * 0.0006))
+        out.append({
+            'time': t, 
+            'open': float(round(o, 5)), 
+            'high': float(round(h, 5)),
+            'low': float(round(l, 5)), 
+            'close': float(round(c, 5))
+        })
+    return pd.DataFrame(out)
+
+def fetch_mt5_data(symbol="EURUSD", timeframe=mt5.TIMEFRAME_M15, bars=2000):
+    if not mt5.initialize():
+        # Fallback to synthetic if MT5 not available
+        return generate_data(bars)
+        
+    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, bars)
+    if rates is None:
+        return generate_data(bars)
+        
+    df = pd.DataFrame(rates)
+    df['time'] = pd.to_datetime(df['time'], unit='s')
+    # Filter columns
+    return df[['time', 'open', 'high', 'low', 'close']]
 
 class DataFeed:
-    def __init__(self, mode="offline", csv_path=None):
+    # Legacy class for other potential imports
+    def __init__(self, mode="live"):
         self.mode = mode
-        self.csv_path = csv_path
-        self._historical_data = None
-        self._current_index = 0
-        
-        if self.mode == "live" and not MT5_AVAILABLE:
-            raise RuntimeError("Live mode requested but MetaTrader5 library is not installed.")
-            
-        if self.mode == "offline":
-            self._load_csv()
-            
-    def _load_csv(self):
-        if not self.csv_path or not os.path.exists(self.csv_path):
-            raise FileNotFoundError(f"CSV not found: {self.csv_path}")
-            
-        self._historical_data = pd.read_csv(self.csv_path)
-        # Ensure correct column names
-        self._historical_data.columns = [c.lower() for c in self._historical_data.columns]
-        
-    def get_initial_history(self, num_bars=500):
-        """
-        Returns the first block of bars to 'prime' the chart.
-        """
-        if self.mode == "offline":
-            self._current_index = num_bars
-            return self._historical_data.iloc[:num_bars].copy()
-        else:
-            # LIVE MT5 Implementation
-            pass
-            
-    def get_next_bar(self):
-        """
-        Bar Replay: Yields exactly one new candle.
-        """
-        if self.mode == "offline":
-            if self._current_index < len(self._historical_data):
-                bar = self._historical_data.iloc[self._current_index:self._current_index+1].copy()
-                self._current_index += 1
-                return bar
-            return None # End of data
-        else:
-            # LIVE MT5 Implementation
-            pass
+    
+    def get_initial_history(self, symbol, tf, count=2000):
+        return fetch_mt5_data(symbol, tf, count)
