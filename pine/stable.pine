@@ -299,6 +299,7 @@ showSwingOBInput    = input.bool(true,  "Show Swing OBs",        group = grpOB, 
 swingOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, inline = "sob", minval = 0, maxval = 10)
 showInternalOBInput = input.bool(true,  "Show Internal OBs",     group = grpOB, inline = "iob")
 internalOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, inline = "iob", minval = 0, maxval = 10)
+showRefinedOBInput  = input.bool(true,  "Show Refined OB",       group = grpOB, tooltip="Automatically refines OBs to lower timeframes.")
 hideMitigatedOBInput= input.bool(false, "Hide Partially Mitigated OBs", group = grpOB, tooltip="If YES, partially mitigated OBs are fully hidden from the chart.")
 //-----------------------------------------------------------------------------
 // Screener Inputs Removed for Optimization
@@ -312,24 +313,24 @@ obMitigationInput   = input.string("High/Low", "OB Mitigation",  group = grpOB, 
      tooltip = "Price source used to determine when an OB is invalidated (mitigated).")
 
 grpBull = "Bullish Shades"
-bull1 = input.color(color.new(#1848cc, 90), "Bullish 1 (Darkest)", group=grpBull)
-bull2 = input.color(color.new(#1848cc, 92), "Bullish 2", group=grpBull)
-bull3 = input.color(color.new(#1848cc, 94), "Bullish 3", group=grpBull)
+bull1 = input.color(color.new(#1848cc, 70), "Bullish 1 (Darkest)", group=grpBull)
+bull2 = input.color(color.new(#1848cc, 85), "Bullish 2", group=grpBull)
+bull3 = input.color(color.new(#1848cc, 92), "Bullish 3", group=grpBull)
 bull4 = input.color(color.new(#1848cc, 96), "Bullish 4", group=grpBull)
 bull5 = input.color(color.new(#1848cc, 98), "Bullish 5 (Lightest)", group=grpBull)
 
 grpBear = "Bearish Shades"
-bear1 = input.color(color.new(#b22833, 90), "Bearish 1 (Darkest)", group=grpBear)
-bear2 = input.color(color.new(#b22833, 92), "Bearish 2", group=grpBear)
-bear3 = input.color(color.new(#b22833, 94), "Bearish 3", group=grpBear)
+bear1 = input.color(color.new(#b22833, 70), "Bearish 1 (Darkest)", group=grpBear)
+bear2 = input.color(color.new(#b22833, 85), "Bearish 2", group=grpBear)
+bear3 = input.color(color.new(#b22833, 92), "Bearish 3", group=grpBear)
 bear4 = input.color(color.new(#b22833, 96), "Bearish 4", group=grpBear)
 bear5 = input.color(color.new(#b22833, 98), "Bearish 5 (Lightest)", group=grpBear)
 
 grpMit = "Mitigated Shades"
-mit1 = input.color(color.new(color.gray, 85), "Mitigated 1 (Darkest/Border)", group=grpMit)
-mit2 = input.color(color.new(color.gray, 88), "Mitigated 2 (Fill)", group=grpMit)
+mit1 = input.color(color.new(color.gray, 20), "Mitigated 1 (Darkest/Border)", group=grpMit)
+mit2 = input.color(color.new(color.gray, 85), "Mitigated 2 (Fill)", group=grpMit)
 mit3 = input.color(color.new(color.gray, 92), "Mitigated 3", group=grpMit)
-mit4 = input.color(color.new(color.gray, 95), "Mitigated 4", group=grpMit)
+mit4 = input.color(color.new(color.gray, 96), "Mitigated 4", group=grpMit)
 mit5 = input.color(color.new(color.gray, 98), "Mitigated 5 (Lightest)", group=grpMit)
 
 //-----------------------------------------------------------------------------
@@ -617,11 +618,32 @@ drawOBs(int obType) =>
             color c4 = ob.bias == BULLISH ? bull4 : bear4
             color c5 = ob.bias == BULLISH ? bull5 : bear5
 
-            // Determine if internal or swing for the active OB shift
-            color outer2 = obType == 1 ? c5 : c4
-            color outer1 = obType == 1 ? c4 : c3
-            color base  = obType == 1 ? c3 : c2
-            color core  = obType == 1 ? c2 : c1
+            bool hasMiddle = ob.isRefined and not na(ob.r1High) and (ob.r1High != ob.barHigh or ob.r1Low != ob.barLow)
+            
+            color bColor = obType == 1 ? c3 : c2
+            color oColor = na
+            color oMit = na
+            color r1Color = na
+            color r1Mit = na
+            
+            if obType == 1
+                if hasMiddle
+                    r1Color := c4
+                    r1Mit   := mit4
+                    oColor  := c5
+                    oMit    := mit5
+                else
+                    oColor  := c4
+                    oMit    := mit4
+            else
+                if hasMiddle
+                    r1Color := c3
+                    r1Mit   := mit3
+                    oColor  := c4
+                    oMit    := mit4
+                else
+                    oColor  := c3
+                    oMit    := mit3
 
             // ── Box ──────────────────────────────────────────────────────────
             box b = boxes.get(idx)
@@ -644,7 +666,7 @@ drawOBs(int obType) =>
                 b.set_top_left_point(     chart.point.new(ob.barTime, na, ob.barHigh))
                 b.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.barLow))
                 b.set_border_color(na)
-                b.set_bgcolor(base)
+                b.set_bgcolor(bColor)
                 
                 // Hide Inner Box
                 inB.set_top_left_point(     chart.point.new(na, na, na))
@@ -654,26 +676,26 @@ drawOBs(int obType) =>
             box oB = origBoxes.get(idx)
             box r1B = ref1Boxes.get(idx)
 
-            if not na(ob.oHigh) and ob.oHigh != ob.barHigh
+            if ob.isRefined and not na(ob.oHigh)
                 oB.set_top_left_point(     chart.point.new(ob.barTime, na, ob.oHigh))
                 oB.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.oLow))
                 oB.set_border_color(na)
                 if ob.partial
-                    oB.set_bgcolor(mit5)
+                    oB.set_bgcolor(oMit)
                 else
-                    oB.set_bgcolor(outer2)
+                    oB.set_bgcolor(oColor)
             else
                 oB.set_top_left_point(     chart.point.new(na, na, na))
                 oB.set_bottom_right_point( chart.point.new(na, na, na))
 
-            if not na(ob.r1High) and ob.r1High != ob.barHigh
+            if hasMiddle
                 r1B.set_top_left_point(     chart.point.new(ob.barTime, na, ob.r1High))
                 r1B.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.r1Low))
                 r1B.set_border_color(na)
                 if ob.partial
-                    r1B.set_bgcolor(mit4)
+                    r1B.set_bgcolor(r1Mit)
                 else
-                    r1B.set_bgcolor(outer1)
+                    r1B.set_bgcolor(r1Color)
             else
                 r1B.set_top_left_point(     chart.point.new(na, na, na))
                 r1B.set_bottom_right_point( chart.point.new(na, na, na))
@@ -728,7 +750,7 @@ validBearOB = ob_bearSweep and ob_bearFVG and (not obTrendFilterInput or swingTr
 
 // ── Step 4: Store the OB (coordinates taken from bar[2]) ────────────────────
 autoLtfStr = getAutoLTF()
-hasAutoLtf = autoLtfStr != ""
+hasAutoLtf = showRefinedOBInput and autoLtfStr != ""
 
 getAutoLTF2() =>
     switch autoLtfStr
@@ -739,7 +761,7 @@ getAutoLTF2() =>
         => ""
 
 autoLtf2Str = getAutoLTF2()
-hasAutoLtf2 = autoLtf2Str != ""
+hasAutoLtf2 = showRefinedOBInput and autoLtf2Str != ""
 
 calcLTF_OB_Data(int size) =>
     int tBias = calcTrendForSecurity(size)
