@@ -11,10 +11,26 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import MetaTrader5 as mt5
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DATA
+# DATA & MT5 INIT
 # ─────────────────────────────────────────────────────────────────────────────
+if not mt5.initialize():
+    print("initialize() failed, error code =", mt5.last_error())
+    ACCOUNT_INFO = None
+    WATCHLIST = ["EURUSD", "GBPUSD"]
+else:
+    print("MT5 initialized successfully")
+    ACCOUNT_INFO = mt5.account_info()
+    symbols = mt5.symbols_get()
+    if symbols:
+        WATCHLIST = [s.name for s in symbols if s.visible]
+        if not WATCHLIST: # Fallback if no visible symbols
+             WATCHLIST = [s.name for s in symbols[:50]]
+    else:
+        WATCHLIST = ["EURUSD", "GBPUSD"]
+
 def generate_data(rows: int = 2000) -> pd.DataFrame:
     np.random.seed(99)
     closes = np.cumprod(1 + np.random.normal(0, 0.0018, rows)) * 68000
@@ -32,6 +48,15 @@ def generate_data(rows: int = 2000) -> pd.DataFrame:
 
 ALL_DATA = generate_data(2000)
 BULLISH, BEARISH = 1, -1
+
+def fetch_mt5_data(symbol="EURUSD", timeframe=mt5.TIMEFRAME_M15, bars=200):
+    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, bars)
+    if rates is None:
+        return pd.DataFrame()
+    df = pd.DataFrame(rates)
+    df['time'] = pd.to_datetime(df['time'], unit='s')
+    # Filter columns to only what we need
+    return df[['time', 'open', 'high', 'low', 'close']]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SMC ENGINE  –  exact port of stable.pine
@@ -251,19 +276,48 @@ class SMCEngine:
                 if ob in self.obs:
                     self.obs.remove(ob)
 
-    def _log(self, ob, entry, direction, t):
+    def _log(self, ob, entry, direction, t, live=False, symbol="EURUSD", lot=0.1):
         sl   = ob.high if direction == BEARISH else ob.low
         risk = abs(entry - sl)
         if risk == 0: return
         tp = entry - risk * self.rr if direction == BEARISH else entry + risk * self.rr
+        
+        trade_dir = 'SHORT' if direction == BEARISH else 'LONG'
         self.trades.append({
             'time':   t,
-            'dir':    'SHORT' if direction == BEARISH else 'LONG',
+            'dir':    trade_dir,
             'entry':  entry,
             'sl':     sl,
             'tp':     tp,
             'result': 'open'
         })
+        
+        # Execute Live Order if requested
+        if live:
+            order_type = mt5.ORDER_TYPE_SELL if trade_dir == 'SHORT' else mt5.ORDER_TYPE_BUY
+            point = mt5.symbol_info(symbol).point
+            price = mt5.symbol_info_tick(symbol).bid if trade_dir == 'SHORT' else mt5.symbol_info_tick(symbol).ask
+
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": float(lot),
+                "type": order_type,
+                "price": price,
+                "sl": float(sl),
+                "tp": float(tp),
+                "deviation": 20,
+                "magic": 234000,
+                "comment": f"SMC OB {ob.time}",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+
+            result = mt5.order_send(request)
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                print(f"Order failed on {symbol}, lot {lot}: {result.comment}")
+            else:
+                print(f"Order sent! Ticket: {result.order}")
 
 
 
@@ -330,6 +384,29 @@ html,body{height:100%;overflow:hidden;
 #stats-bar .st strong{font-size:13px;font-weight:700}
 .green{color:#26a069!important}.red{color:#ef5350!important}
 #chart-wrap{position:absolute;top:88px;left:0;right:0;bottom:0}
+
+/* Profile Hover Styles */
+.profile {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  cursor: pointer; margin-left: auto; color: #131722; font-size: 13px; font-weight: 600;
+}
+.profile-icon {
+  width: 28px; height: 28px; border-radius: 50%; background: #2962ff; color: white;
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+}
+.badge {
+  padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; color: white;
+}
+.badge.demo { background: #ff9800; }
+.badge.real { background: #26a069; }
+.profile-dropdown {
+  display: none; position: absolute; top: 35px; right: 0;
+  background: white; border: 1px solid #e0e3eb; border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 12px; width: 220px; z-index: 1000;
+}
+.profile:hover .profile-dropdown { display: block; }
+.prof-stat { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; color: #787b86; }
+.prof-stat strong { color: #131722; }
 </style>
 </head><body>{%app_entry%}
 <footer>{%config%}{%scripts%}{%renderer%}</footer>
@@ -341,16 +418,15 @@ app.layout=html.Div(style={'height':'100vh'}, children=[
     html.Div(id='toolbar', children=[
         html.Span("⚡ SMC Terminal", className='logo'),
         html.Div(className='sep'),
-        html.Button("▶  Next Bar",  id='btn-next',   n_clicks=0, className='tv-btn play'),
-        html.Button("⏭  +10",       id='btn-n10',    n_clicks=0, className='tv-btn'),
-        html.Button("⏭  +50",       id='btn-n50',    n_clicks=0, className='tv-btn'),
-        html.Button("⟳  Reset",     id='btn-reset',  n_clicks=0, className='tv-btn reset'),
-        html.Div(className='sep'),
-        # RR input
-        html.Span("RR 1:", style={'fontSize':'12px','color':'#787b86'}),
-        dcc.Input(id='inp-rr', type='number', value=3, min=0.5, max=20, step=0.5,
-                  className='rr-input', debounce=True,
-                  placeholder='RR'),
+        # Symbol
+        html.Span("Symbol:", style={'fontSize':'12px','color':'#787b86'}),
+        dcc.Dropdown(
+            id='inp-symbol',
+            options=[{'label': s, 'value': s} for s in WATCHLIST],
+            value=WATCHLIST[0] if WATCHLIST else "EURUSD",
+            clearable=False,
+            style={'width':'110px','fontSize':'12px','fontWeight':'600'}
+        ),
         html.Div(className='sep'),
         # Timeframe selector
         html.Span("TF:", style={'fontSize':'12px','color':'#787b86'}),
@@ -368,21 +444,75 @@ app.layout=html.Div(style={'height':'100vh'}, children=[
             style={'width':'70px','fontSize':'12px','fontWeight':'600'}
         ),
         html.Div(className='sep'),
-        html.Div(id='stats', children=[
+        # RR input
+        html.Span("RR 1:", style={'fontSize':'12px','color':'#787b86'}),
+        dcc.Input(id='inp-rr', type='number', value=3, min=0.5, max=20, step=0.5,
+                  className='rr-input', debounce=True,
+                  placeholder='RR'),
+        html.Div(className='sep'),
+        # Lot
+        html.Span("Lot:", style={'fontSize':'12px','color':'#787b86'}),
+        dcc.Input(id='inp-lot', type='number', value=0.1, step=0.01, className='rr-input', debounce=True, style={'width':'50px'}),
+        html.Div(className='sep'),
+        # Toggles
+        dcc.Checklist(
+            id='live-toggle',
+            options=[
+                {'label': ' Live Feed', 'value': 'live'},
+                {'label': ' Auto Trade', 'value': 'trade'}
+            ],
+            value=[],
+            inline=True,
+            style={'fontSize':'12px','fontWeight':'600', 'color':'#131722', 'display':'flex', 'gap':'8px'}
+        ),
+        html.Div(className='sep'),
+        # Replay Controls
+        html.Button("▶  Next Bar",  id='btn-next',   n_clicks=0, className='tv-btn play'),
+        html.Button("⏭  +10",       id='btn-n10',    n_clicks=0, className='tv-btn'),
+        html.Button("⏭  +50",       id='btn-n50',    n_clicks=0, className='tv-btn'),
+        html.Button("⟳  Reset",     id='btn-reset',  n_clicks=0, className='tv-btn reset'),
+        html.Div(className='sep'),
+        html.Span("Lot:", style={'fontSize':'12px','color':'#787b86', 'marginLeft':'4px'}),
+        dcc.Input(id='inp-lot', type='number', value=0.1, step=0.01, className='rr-input', debounce=True, style={'width':'50px'}),
+        html.Div(className='sep'),
+        dcc.Checklist(
+            id='live-toggle',
+            options=[
+                {'label': ' Live Feed', 'value': 'live'},
+                {'label': ' Auto Trade', 'value': 'trade'}
+            ],
+            value=[],
+            inline=True,
+            style={'fontSize':'12px','fontWeight':'600', 'color':'#131722', 'display':'flex', 'gap':'8px'}
+        ),
+        html.Div(className='sep'),
+        # Core Stats
+        html.Div(id='stats', style={'display': 'flex', 'gap': '18px', 'alignItems': 'center', 'fontSize': '12px', 'color': '#787b86'}, children=[
             html.Div(["Bars: ",    html.Strong("200", id='s-bars')],   className='stat'),
             html.Div(["OBs: ",     html.Strong("0",   id='s-obs')],    className='stat'),
-            html.Div(["Trend: ",   html.Strong("—",   id='s-trend',
-                      style={'color':'#787b86'})],                       className='stat'),
+            html.Div(["Trend: ",   html.Strong("—",   id='s-trend', style={'color':'#787b86'})], className='stat'),
+            html.Div(["Win %: ",   html.Strong("0%",  id='ss-wr')],      className='stat'),
+            html.Div(["PnL (R): ", html.Strong("0R",  id='ss-pnl')],     className='stat'),
+        ]),
+        html.Div(className='profile', children=[
+            html.Div("User", className='profile-icon', id='prof-icon'),
+            html.Span("Demo" if getattr(ACCOUNT_INFO, 'trade_mode', 0) == 0 else "Real", 
+                      className=f"badge {'demo' if getattr(ACCOUNT_INFO, 'trade_mode', 0) == 0 else 'real'}"),
+            html.Div(className='profile-dropdown', children=[
+                html.Div(className='prof-stat', children=[html.Span("Name:"), html.Strong(str(getattr(ACCOUNT_INFO, 'name', 'N/A'))[-14:])]),
+                html.Div(className='prof-stat', children=[html.Span("Server:"), html.Strong(str(getattr(ACCOUNT_INFO, 'server', 'N/A'))[-14:])]),
+                html.Div(style={'height': '1px', 'background': '#e0e3eb', 'margin': '6px 0'}),
+                html.Div(className='prof-stat', children=[html.Span("Balance:"), html.Strong(f"{getattr(ACCOUNT_INFO, 'balance', 0.0):.2f}")]),
+                html.Div(className='prof-stat', children=[html.Span("Equity:"), html.Strong(f"{getattr(ACCOUNT_INFO, 'equity', 0.0):.2f}")]),
+                html.Div(className='prof-stat', children=[html.Span("Currency:"), html.Strong(getattr(ACCOUNT_INFO, 'currency', 'USD'))]),
+            ])
         ])
     ]),
-
-    # ── Stats Bar ────────────────────────────────────────────────────────────
-    html.Div(id='stats-bar', children=[
+    # ── Stats Bar (Hidden) ───────────────────────────────────────────────────
+    html.Div(id='stats-bar', style={'display': 'none'}, children=[
         html.Div(["Trades: ",  html.Strong("0", id='ss-trades')],  className='st'),
         html.Div(["Wins: ",    html.Strong("0", id='ss-wins',   style={'color':'#26a069'})], className='st'),
         html.Div(["Losses: ",  html.Strong("0", id='ss-losses', style={'color':'#ef5350'})], className='st'),
-        html.Div(["Win Rate: ",html.Strong("0%",id='ss-wr')],      className='st'),
-        html.Div(["PnL (R): ", html.Strong("0R",id='ss-pnl')],     className='st'),
         html.Div(["Active: ",  html.Strong("None",id='ss-active')],className='st', style={'marginLeft':'auto','marginRight':'15px'}),
     ]),
 
@@ -398,6 +528,7 @@ app.layout=html.Div(style={'height':'100vh'}, children=[
     ]),
 
     dcc.Store(id='clk', data={'n':0,'n10':0,'n50':0,'nr':0}),
+    dcc.Interval(id='live-interval', interval=1000, n_intervals=0, disabled=True)
 ])
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -597,32 +728,70 @@ def _calc_stats(trades, rr, current_close):
      Output('ss-losses','children'), Output('ss-wr','children'),
      Output('ss-pnl','children'), Output('ss-pnl','style'),
      Output('ss-active','children'), Output('ss-active','style'),
-     Output('clk','data')],
+     Output('clk','data'), Output('live-interval', 'disabled')],
     [Input('btn-next','n_clicks'), Input('btn-n10','n_clicks'),
-     Input('btn-n50','n_clicks'),  Input('btn-reset','n_clicks')],
-    [State('clk','data'), State('inp-rr','value'), State('inp-tf','value')]
+     Input('btn-n50','n_clicks'),  Input('btn-reset','n_clicks'),
+     Input('live-interval', 'n_intervals'),
+     Input('inp-symbol', 'value'), Input('inp-tf', 'value')],
+    [State('clk','data'), State('inp-rr','value'),
+     State('live-toggle', 'value'), State('inp-lot', 'value')]
 )
-def on_click(n, n10, n50, nr, prev, rr_val, tf_val):
+def on_click(n, n10, n50, nr, n_int, symbol, tf_val, prev, rr_val, live_toggles, lot_val):
     global current_idx, visible_df, engine
     rr = float(rr_val) if rr_val else 3.0
+    lot = float(lot_val) if lot_val else 0.1
     pn,pn10,pn50,pr = prev.get('n',0),prev.get('n10',0),prev.get('n50',0),prev.get('nr',0)
+    
+    is_live_feed = 'live' in live_toggles
+    is_auto_trade = 'trade' in live_toggles
+    
+    tf_map = {1: mt5.TIMEFRAME_M1, 5: mt5.TIMEFRAME_M5, 15: mt5.TIMEFRAME_M15, 60: mt5.TIMEFRAME_H1, 240: mt5.TIMEFRAME_H4}
+    mt5_tf = tf_map.get(int(tf_val), mt5.TIMEFRAME_M15)
+    
+    ctx = dash.callback_context
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
 
-    if nr>pr:
-        current_idx=PRIME
-        visible_df=ALL_DATA.iloc[:PRIME].copy()
+    # Reset Action (User changed config or clicked Reset)
+    config_changed = (triggered_id in ['btn-reset', 'live-toggle', 'inp-symbol', 'inp-tf'])
+    if nr > pr or config_changed:
+        df = fetch_mt5_data(symbol, mt5_tf, 2000)
+        global ALL_DATA
+        if not df.empty:
+            ALL_DATA = df
+        else:
+            ALL_DATA = generate_data(2000)
+            
+        current_idx = PRIME
+        visible_df = ALL_DATA.iloc[:PRIME].copy()
+            
         engine=SMCEngine(length=50, rr=rr)
+        # We don't want to execute live orders on past loaded data
         engine.update(visible_df, rr=rr)
+        
+        # Monkey patch _log to execute on live ticks going forward
+        def _live_log(ob, entry, direction, t):
+            # Hack to allow modifying method dynamically while preserving context
+            SMCEngine._log(engine, ob, entry, direction, t, live=is_auto_trade, symbol=symbol, lot=lot)
+        engine._log = _live_log
+        
     else:
-        advance=0
-        if n>pn:     advance=1
-        if n10>pn10: advance=10
-        if n50>pn50: advance=50
-        if advance:
-            end=min(current_idx+advance,len(ALL_DATA))
-            new_bars = ALL_DATA.iloc[current_idx:end]
-            visible_df=pd.concat([visible_df,new_bars],ignore_index=True)
-            current_idx=end
-            engine.update(visible_df, rr=rr)   # resolves SL/TP internally
+        # Standard Next Bar / Live Interval Action
+        if is_live_feed and triggered_id == 'live-interval':
+            new_df = fetch_mt5_data(symbol, mt5_tf, PRIME)
+            if not new_df.empty:
+                visible_df = new_df
+                engine.update(visible_df, rr=rr)
+        elif not is_live_feed:
+            advance=0
+            if n>pn:     advance=1
+            if n10>pn10: advance=10
+            if n50>pn50: advance=50
+            if advance:
+                end=min(current_idx+advance,len(ALL_DATA))
+                new_bars = ALL_DATA.iloc[current_idx:end]
+                visible_df=pd.concat([visible_df,new_bars],ignore_index=True)
+                current_idx=end
+                engine.update(visible_df, rr=rr)   # resolves SL/TP internally
 
     total,wins,losses,wr,pnl_str,pnl_clr,act_str,act_clr = _calc_stats(engine.trades, rr, visible_df['close'].iloc[-1])
 
@@ -638,7 +807,8 @@ def on_click(n, n10, n50, nr, prev, rr_val, tf_val):
         str(total), str(wins), str(losses), wr,
         pnl_str, {'color':pnl_clr,'fontWeight':'700'},
         act_str, {'color':act_clr,'fontWeight':'700'},
-        {'n':n,'n10':n10,'n50':n50,'nr':nr}
+        {'n':n,'n10':n10,'n50':n50,'nr':nr},
+        not is_live_feed  # Disabled if not live
     )
 
 if __name__=='__main__':
