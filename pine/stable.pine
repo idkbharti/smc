@@ -745,8 +745,8 @@ ob_bullFVG  = low  > high[2]
 ob_bearFVG  = high < low[2]
 
 // ── Step 3: Both conditions met + optionally aligned with current swing trend ───────────
-validBullOB = ob_bullSweep and ob_bullFVG and (not obTrendFilterInput or swingTrend.bias == BULLISH)
-validBearOB = ob_bearSweep and ob_bearFVG and (not obTrendFilterInput or swingTrend.bias == BEARISH)
+validBullOB = ob_bullSweep and ob_bullFVG and low[1] >= low[2] and (not obTrendFilterInput or swingTrend.bias == BULLISH)
+validBearOB = ob_bearSweep and ob_bearFVG and high[1] <= high[2] and (not obTrendFilterInput or swingTrend.bias == BEARISH)
 
 // ── Step 4: Store the OB (coordinates taken from bar[2]) ────────────────────
 autoLtfStr = getAutoLTF()
@@ -769,8 +769,8 @@ calcLTF_OB_Data(int size) =>
     bool bearSweep = high[2] > high[3]
     bool bullFVG = low > high[2]
     bool bearFVG = high < low[2]
-    bool vBull = bullSweep and bullFVG and (not obTrendFilterInput or tBias == BULLISH)
-    bool vBear = bearSweep and bearFVG and (not obTrendFilterInput or tBias == BEARISH)
+    bool vBull = bullSweep and bullFVG and low[1] >= low[2] and (not obTrendFilterInput or tBias == BULLISH)
+    bool vBear = bearSweep and bearFVG and high[1] <= high[2] and (not obTrendFilterInput or tBias == BEARISH)
     
     var float lastBull_H = na
     var float lastBull_L = na
