@@ -300,17 +300,17 @@ swingOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, inli
 showInternalOBInput = input.bool(true,  "Show Internal OBs",     group = grpOB, inline = "iob")
 internalOBOutsideCountInput = input.int( 1, "Outside OB Count", group = grpOB, inline = "iob", minval = 0, maxval = 10)
 showRefinedOBInput  = input.bool(true,  "Show Refined OB",       group = grpOB, tooltip="Automatically refines OBs to lower timeframes.")
-hideMitigatedOBInput= input.bool(false, "Hide Partially Mitigated OBs", group = grpOB, tooltip="If YES, partially mitigated OBs are fully hidden from the chart.")
 //-----------------------------------------------------------------------------
 // Screener Inputs Removed for Optimization
 //-----------------------------------------------------------------------------
 
 obTrendFilterInput  = input.bool(false, "Filter OB by Trend",    group = grpOB, tooltip="If disabled, shows both Bullish and Bearish OBs regardless of the current trend.")
 
+obMitigationInput   = input.string("Close", "OB Mitigation",     group = grpOB, options = ["Close","High/Low"],
+     tooltip = "Price source used to determine when an OB is invalidated (mitigated). 'Close' means a body close through the extreme.")
+
 obFilterInput       = input.string("Atr", "OB Filter",           group = grpOB, options = ["Atr","Cumulative Mean Range"],
      tooltip = "ATR: skip candles wider than 2×ATR (high-volatility). Cumulative Mean Range: uses rolling average true range.")
-obMitigationInput   = input.string("High/Low", "OB Mitigation",  group = grpOB, options = ["Close","High/Low"],
-     tooltip = "Price source used to determine when an OB is invalidated (mitigated).")
 
 grpBull = "Bullish Shades"
 bull1 = input.color(color.new(#1848cc, 70), "Bullish 1 (Darkest)", group=grpBull)
@@ -326,13 +326,6 @@ bear3 = input.color(color.new(#b22833, 92), "Bearish 3", group=grpBear)
 bear4 = input.color(color.new(#b22833, 96), "Bearish 4", group=grpBear)
 bear5 = input.color(color.new(#b22833, 98), "Bearish 5 (Lightest)", group=grpBear)
 
-grpMit = "Mitigated Shades"
-mit1 = input.color(color.new(color.gray, 20), "Mitigated 1 (Darkest/Border)", group=grpMit)
-mit2 = input.color(color.new(color.gray, 85), "Mitigated 2 (Fill)", group=grpMit)
-mit3 = input.color(color.new(color.gray, 92), "Mitigated 3", group=grpMit)
-mit4 = input.color(color.new(color.gray, 96), "Mitigated 4", group=grpMit)
-mit5 = input.color(color.new(color.gray, 98), "Mitigated 5 (Lightest)", group=grpMit)
-
 //-----------------------------------------------------------------------------
 // OB Type
 //-----------------------------------------------------------------------------
@@ -342,13 +335,9 @@ type orderBlock
     float barLow        // low  of the OB candle
     int   barTime       // time of the OB candle
     int   bias          // BULLISH (+1) or BEARISH (-1)
-    bool  partial = false // true when price has entered the zone but not fully broken it
     bool  mitigated = false // true when price has fully broken the zone
-    int   mitigationTime = 0 // time when the OB was mitigated
     bool  isRefined = false
     string refinedTag = ""
-    float currentHigh = 0.0
-    float currentLow = 0.0
     float oHigh = na
     float oLow = na
     float r1High = na
@@ -366,8 +355,6 @@ var array<orderBlock> deepRefinedOBs = array.new<orderBlock>()
 // Parallel arrays of boxes AND labels for efficient `set_*` updates (created once at bar 0)
 var array<box>   swingOBBoxes    = array.new<box>()
 var array<box>   internalOBBoxes = array.new<box>()
-var array<box>   swingOBInner    = array.new<box>()
-var array<box>   internalOBInner = array.new<box>()
 var array<label> swingOBLabels    = array.new<label>()
 var array<label> internalOBLabels = array.new<label>()
 var array<box>   swingOBorigBoxes    = array.new<box>()
@@ -405,10 +392,7 @@ ob_lows.push(low)
 ob_times.push(time)
 
 //-----------------------------------------------------------------------------
-// OB Mitigation Sources
-//-----------------------------------------------------------------------------
-ob_bearMitigationSrc = obMitigationInput == "Close" ? close : high
-ob_bullMitigationSrc = obMitigationInput == "Close" ? close : low
+// [LEGACY - kept for reference, no longer called]
 
 //-----------------------------------------------------------------------------
 // [LEGACY - kept for reference, no longer called]
@@ -448,41 +432,22 @@ storeOB_legacy(pivot p_ivot, bool internal, int bias) =>
             obs.pop()
         obs.unshift(ob)
 
-//-----------------------------------------------------------------------------
-// deleteOBs()  ─ remove OBs whose price level has been mitigated (breached)
-//-----------------------------------------------------------------------------
 deleteOBs(int obType) =>
     array<orderBlock> obs = obType == 1 ? internalOBs : swingOBs
 
     int i = obs.size() - 1
     while i >= 0
         orderBlock ob = obs.get(i)
+        
+        float mitSrc = ob.bias == BEARISH ? (obMitigationInput == "Close" ? close : high) : (obMitigationInput == "Close" ? close : low)
 
         if ob.bias == BEARISH
-            // Full mitigation: price fully above OB high
-            if ob_bearMitigationSrc > ob.barHigh
+            if mitSrc > ob.barHigh
                 obs.remove(i)
-            // Partial mitigation: price entered the OB zone (above low, not yet above high)
-            else if ob_bearMitigationSrc > ob.barLow
-                if not ob.partial
-                    ob.currentHigh := ob.barHigh
-                    ob.currentLow := ob_bearMitigationSrc
-                else
-                    ob.currentLow := math.max(ob.currentLow, ob_bearMitigationSrc)
-                ob.partial := true
 
         else if ob.bias == BULLISH
-            // Full mitigation: price fully below OB low
-            if ob_bullMitigationSrc < ob.barLow
+            if mitSrc < ob.barLow
                 obs.remove(i)
-            // Partial mitigation: price entered the OB zone (below high, not yet below low)
-            else if ob_bullMitigationSrc < ob.barHigh
-                if not ob.partial
-                    ob.currentHigh := ob_bullMitigationSrc
-                    ob.currentLow := ob.barLow
-                else
-                    ob.currentHigh := math.min(ob.currentHigh, ob_bullMitigationSrc)
-                ob.partial := true
 
         i -= 1
 
@@ -492,7 +457,6 @@ deleteOBs(int obType) =>
 drawOBs(int obType) =>
     array<orderBlock> obs    = obType == 1 ? internalOBs : swingOBs
     array<box>        boxes  = obType == 1 ? internalOBBoxes : swingOBBoxes
-    array<box>        inner  = obType == 1 ? internalOBInner : swingOBInner
     array<box>        origBoxes = obType == 1 ? internalOBorigBoxes : swingOBorigBoxes
     array<box>        ref1Boxes = obType == 1 ? internalOBref1Boxes : swingOBref1Boxes
     array<label>      labels = obType == 1 ? internalOBLabels : swingOBLabels
@@ -519,19 +483,18 @@ drawOBs(int obType) =>
         for ob in obs
             // Apply custom display filters
             bool skipOB = false
-            if hideMitigatedOBInput and ob.partial
-                skipOB := true
-
-            if not skipOB
-                ob_inZone = ob.barLow < zoneTop and ob.barHigh > zoneBottom
-                if ob_inZone
-                    inRange.push(ob)
-                else if ob.barLow >= zoneTop
-                    // OB is above range — collect them
-                    aboveOBs.push(ob)
-                else if ob.barHigh <= zoneBottom
-                    // OB is below range — collect them
-                    belowOBs.push(ob)
+        // obs is sorted newest-first; iterate all
+        for ob in obs
+            // Apply custom display filters
+            ob_inZone = ob.barLow < zoneTop and ob.barHigh > zoneBottom
+            if ob_inZone
+                inRange.push(ob)
+            else if ob.barLow >= zoneTop
+                // OB is above range — collect them
+                aboveOBs.push(ob)
+            else if ob.barHigh <= zoneBottom
+                // OB is below range — collect them
+                belowOBs.push(ob)
 
         // Sort above/below to find the closest ones
         // Above OBs: closest means lowest barLow. We want ascending order of barLow.
@@ -590,10 +553,10 @@ drawOBs(int obType) =>
         int currentBoxCount = boxes.size()
         
         // Remove excess boxes
+        // Remove excess boxes
         if currentBoxCount > visibleCount
             for i = currentBoxCount - 1 to visibleCount
                 box.delete(boxes.pop())
-                box.delete(inner.pop())
                 box.delete(origBoxes.pop())
                 box.delete(ref1Boxes.pop())
                 label.delete(labels.pop())
@@ -601,7 +564,6 @@ drawOBs(int obType) =>
         else if currentBoxCount < visibleCount
             for i = currentBoxCount to visibleCount - 1
                 boxes.push(box.new(na, na, na, na, xloc = xloc.bar_time))
-                inner.push(box.new(na, na, na, na, xloc = xloc.bar_time))
                 origBoxes.push(box.new(na, na, na, na, xloc = xloc.bar_time))
                 ref1Boxes.push(box.new(na, na, na, na, xloc = xloc.bar_time))
                 labels.push(label.new(na, na, text = "", xloc = xloc.bar_time,
@@ -629,48 +591,24 @@ drawOBs(int obType) =>
             if obType == 1
                 if hasMiddle
                     r1Color := c4
-                    r1Mit   := mit4
                     oColor  := c5
-                    oMit    := mit5
                 else
                     oColor  := c4
-                    oMit    := mit4
             else
                 if hasMiddle
                     r1Color := c3
-                    r1Mit   := mit3
                     oColor  := c4
-                    oMit    := mit4
                 else
                     oColor  := c3
-                    oMit    := mit3
 
             // ── Box ──────────────────────────────────────────────────────────
             box b = boxes.get(idx)
-            box inB = inner.get(idx)
             
-            if ob.partial
-                // Draw Full Box as a Hollow Border using Mitigated Shades
-                b.set_top_left_point(     chart.point.new(ob.barTime, na, ob.barHigh))
-                b.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.barLow))
-                b.set_border_color(mit1)
-                b.set_bgcolor(color(na))
-                
-                // Draw Remaining Area as full Fill
-                inB.set_top_left_point(     chart.point.new(ob.barTime, na, ob.currentHigh))
-                inB.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.currentLow))
-                inB.set_border_color(na)
-                inB.set_bgcolor(mit2)
-            else
-                // Draw normal Full Box with Fill
-                b.set_top_left_point(     chart.point.new(ob.barTime, na, ob.barHigh))
-                b.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.barLow))
-                b.set_border_color(na)
-                b.set_bgcolor(bColor)
-                
-                // Hide Inner Box
-                inB.set_top_left_point(     chart.point.new(na, na, na))
-                inB.set_bottom_right_point( chart.point.new(na, na, na))
+            // Draw normal Full Box with Fill
+            b.set_top_left_point(     chart.point.new(ob.barTime, na, ob.barHigh))
+            b.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.barLow))
+            b.set_border_color(na)
+            b.set_bgcolor(bColor)
 
             // ── Outer Bounds Borders ──────────────────────────────────────────
             box oB = origBoxes.get(idx)
@@ -680,10 +618,7 @@ drawOBs(int obType) =>
                 oB.set_top_left_point(     chart.point.new(ob.barTime, na, ob.oHigh))
                 oB.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.oLow))
                 oB.set_border_color(na)
-                if ob.partial
-                    oB.set_bgcolor(oMit)
-                else
-                    oB.set_bgcolor(oColor)
+                oB.set_bgcolor(oColor)
             else
                 oB.set_top_left_point(     chart.point.new(na, na, na))
                 oB.set_bottom_right_point( chart.point.new(na, na, na))
@@ -692,10 +627,7 @@ drawOBs(int obType) =>
                 r1B.set_top_left_point(     chart.point.new(ob.barTime, na, ob.r1High))
                 r1B.set_bottom_right_point( chart.point.new(ob_rightTime, na, ob.r1Low))
                 r1B.set_border_color(na)
-                if ob.partial
-                    r1B.set_bgcolor(r1Mit)
-                else
-                    r1B.set_bgcolor(r1Color)
+                r1B.set_bgcolor(r1Color)
             else
                 r1B.set_top_left_point(     chart.point.new(na, na, na))
                 r1B.set_bottom_right_point( chart.point.new(na, na, na))
@@ -708,9 +640,7 @@ drawOBs(int obType) =>
             lbl.set_xy(ob_rightTime, ob_midY)       // anchor = right edge, vertically centered
             lbl.set_text(ob_tag)
             lbl.set_style(label.style_label_right)  // body is LEFT of anchor → inside box
-            color txtC = ob.partial
-                 ? color.new(mit1, 0)
-                 : color.new(ob.bias == BULLISH ? color.blue : color.red, 30)
+            color txtC = color.new(ob.bias == BULLISH ? color.blue : color.red, 30)
             lbl.set_textcolor(txtC)
             lbl.set_size(size.small)
 
