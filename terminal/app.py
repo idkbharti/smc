@@ -13,6 +13,8 @@ import numpy as np
 from datetime import datetime, timedelta
 import MetaTrader5 as mt5
 
+from smc_engine_v2 import SMCEngine, OB, StructureEvent, BULLISH, BEARISH
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA & MT5 INIT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -49,7 +51,7 @@ def generate_data(rows: int = 2000) -> pd.DataFrame:
 ALL_DATA = generate_data(2000)
 BULLISH, BEARISH = 1, -1
 
-def fetch_mt5_data(symbol="EURUSD", timeframe=mt5.TIMEFRAME_M15, bars=200):
+def fetch_mt5_data(symbol="BTCUSDm", timeframe=mt5.TIMEFRAME_M1, bars=200):
     rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, bars)
     if rates is None:
         return pd.DataFrame()
@@ -58,267 +60,7 @@ def fetch_mt5_data(symbol="EURUSD", timeframe=mt5.TIMEFRAME_M15, bars=200):
     # Filter columns to only what we need
     return df[['time', 'open', 'high', 'low', 'close']]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SMC ENGINE  –  exact port of stable.pine
-# ─────────────────────────────────────────────────────────────────────────────
-class OB:
-    """Order Block – mirrors stable.pine `orderBlock` type."""
-    __slots__ = ('high','low','time','bias','partial','cur_h','cur_l','mitigated')
-    def __init__(self, high, low, time, bias):
-        self.high=high; self.low=low; self.time=time; self.bias=bias
-        self.partial=False; self.mitigated=False
-        self.cur_h=high; self.cur_l=low
-
-class StructureEvent:
-    __slots__ = ('kind','level','time','direction')
-    def __init__(self, kind, level, time, direction):
-        self.kind=kind; self.level=level; self.time=time; self.direction=direction
-
-class SMCEngine:
-    """
-    Mirrors stable.pine logic:
-      • leg()            – high[size] > highest(size) → bearish leg start
-                           low[size]  < lowest(size)  → bullish leg start
-      • Swing pivots     – swingHigh/swingLow current/last levels
-      • Trailing extremes– trailing.top = max(high), trailing.bottom = min(low)
-                           used for Strong/Weak High/Low lines
-      • BOS/CHoCH        – ta.crossover(close, swingHigh) / ta.crossunder
-      • OB detection     – bar[-2] sweep + FVG (stable.pine lines 669-680)
-      • Mitigation       – High/Low mode (default in stable.pine)
-    """
-    def __init__(self, length: int = 50, rr: float = 3.0):
-        self.length = length
-        self.rr     = rr
-        self._reset_state()
-
-    def _reset_state(self):
-        # Swing pivot state
-        self.sh_level    = None   # swingHigh.currentLevel
-        self.sh_last     = None   # swingHigh.lastLevel
-        self.sh_time     = None
-        self.sh_crossed  = False
-        self.sl_level    = None   # swingLow.currentLevel
-        self.sl_last     = None
-        self.sl_time     = None
-        self.sl_crossed  = False
-        self.trend       = 0      # swingTrend.bias
-
-        # Trailing extremes (for Strong/Weak lines)
-        self.trail_top         = None
-        self.trail_bottom      = None
-        self.trail_top_time    = None
-        self.trail_bot_time    = None
-
-        # Output arrays
-        self.obs       = []   # active OBs
-        self.structure = []   # BOS/CHoCH events
-        self.trades    = []
-
-    # ── Pine's leg() function ─────────────────────────────────────────────────
-    @staticmethod
-    def _leg(H, L, idx, size):
-        """
-        Mirrors: leg(int size) =>
-          if high[size] > ta.highest(size) => 0 (bearish)
-          if low[size]  < ta.lowest(size)  => 1 (bullish)
-        `highest(size)` in Pine = max of last `size` bars EXCLUDING bar[size]
-        i.e. max(H[idx-size+1 .. idx])
-        """
-        if idx < size: return -1
-        pivot_h = H[idx - size]
-        pivot_l = L[idx - size]
-        # window = bars AFTER pivot but BEFORE current (exclusive of pivot bar)
-        win_h = H[idx - size + 1 : idx + 1]
-        win_l = L[idx - size + 1 : idx + 1]
-        if len(win_h) == 0: return -1
-        if pivot_h > win_h.max(): return 0   # bearish leg (high pivot)
-        if pivot_l < win_l.min(): return 1   # bullish leg (low pivot)
-        return -1
-
-    # ── Main compute ──────────────────────────────────────────────────────────
-    def update(self, df: pd.DataFrame, rr: float = None):
-        if rr is not None: self.rr = rr
-        self._reset_state()
-
-        H = df['high'].values
-        L = df['low'].values
-        C = df['close'].values
-        T = df['time'].values
-        n = len(df)
-        size = self.length
-        prev_leg = -1
-
-        for i in range(n):
-            h, l, c, t = H[i], L[i], C[i], T[i]
-
-            # ── Resolve open trades ──────────────────────────────────────────
-            for tr in self.trades:
-                if tr['result'] == 'open':
-                    if tr['dir'] == 'LONG':
-                        if h >= tr['tp']:  tr['result'] = 'win'
-                        elif l <= tr['sl']: tr['result'] = 'loss'
-                    else:
-                        if l <= tr['tp']:  tr['result'] = 'win'
-                        elif h >= tr['sl']: tr['result'] = 'loss'
-
-            # ── updateTrailingExtremes() ─────────────────────────────────────
-            if self.trail_top is None or h > self.trail_top:
-                self.trail_top      = h
-                self.trail_top_time = t
-            if self.trail_bottom is None or l < self.trail_bottom:
-                self.trail_bottom   = l
-                self.trail_bot_time = t
-
-            # ── getCurrentStructure(size) ────────────────────────────────────
-            cur_leg = self._leg(H, L, i, size)
-            new_pivot       = (cur_leg != -1 and cur_leg != prev_leg)
-            pivot_low       = (cur_leg == 1)
-            pivot_high      = (cur_leg == 0)
-
-            if new_pivot:
-                pi = i - size
-                if self.trend == 0:
-                    self.trend = BULLISH if pivot_low else BEARISH
-
-                if pivot_low:
-                    self.sl_last   = self.sl_level
-                    self.sl_level  = L[pi]
-                    self.sl_time   = T[pi]
-                    self.sl_crossed = False
-                    # sync trailing bottom to pivot low (Pine does this)
-                    self.trail_bottom   = L[pi]
-                    self.trail_bot_time = T[pi]
-                else:
-                    self.sh_last   = self.sh_level
-                    self.sh_level  = H[pi]
-                    self.sh_time   = T[pi]
-                    self.sh_crossed = False
-                    # sync trailing top to pivot high
-                    self.trail_top      = H[pi]
-                    self.trail_top_time = T[pi]
-
-            if cur_leg != -1:
-                prev_leg = cur_leg
-
-            # ── displayStructure() – BOS / CHoCH ────────────────────────────
-            if i > 0:
-                pc = C[i-1]
-                # Bullish break: close crosses above swingHigh.currentLevel
-                if (self.sh_level is not None and not self.sh_crossed
-                        and pc <= self.sh_level and c > self.sh_level):
-                    kind = 'CHoCH' if self.trend == BEARISH else 'BOS'
-                    self.trend      = BULLISH
-                    self.sh_crossed = True
-                    self.structure.append(
-                        StructureEvent(kind, self.sh_level, t, BULLISH))
-
-                # Bearish break: close crosses below swingLow.currentLevel
-                if (self.sl_level is not None and not self.sl_crossed
-                        and pc >= self.sl_level and c < self.sl_level):
-                    kind = 'CHoCH' if self.trend == BULLISH else 'BOS'
-                    self.trend      = BEARISH
-                    self.sl_crossed = True
-                    self.structure.append(
-                        StructureEvent(kind, self.sl_level, t, BEARISH))
-
-            # ── OB detection  (stable.pine lines 668-680) ───────────────────
-            # bar[2] = i-2, bar[3] = i-3, bar[0] = current (i)
-            if i >= 3:
-                c2h, c2l = H[i-2], L[i-2]   # OB candle high / low
-                c3h, c3l = H[i-3], L[i-3]   # candle before OB
-
-                bull_sweep = c2l < c3l        # OB candle swept prior low
-                bull_fvg   = l  > c2h         # FVG: current low above OB high
-                bear_sweep = c2h > c3h        # OB candle swept prior high
-                bear_fvg   = h  < c2l         # FVG: current high below OB low
-
-                # Track whether OB already stored to avoid duplicates
-                ob_time  = T[i-2]
-
-                if bull_sweep and bull_fvg and self.trend == BULLISH:
-                    if not any(ob.time == ob_time and ob.bias == BULLISH
-                               for ob in self.obs):
-                        self.obs.insert(0, OB(c2h, c2l, ob_time, BULLISH))
-
-                if bear_sweep and bear_fvg and self.trend == BEARISH:
-                    if not any(ob.time == ob_time and ob.bias == BEARISH
-                               for ob in self.obs):
-                        self.obs.insert(0, OB(c2h, c2l, ob_time, BEARISH))
-
-            # ── Mitigation (High/Low mode – stable.pine default) ────────────
-            # bear mitigation source = high, bull mitigation source = low
-            to_rm = []
-            for ob in self.obs:
-                if ob.bias == BEARISH:
-                    if h > ob.high:           # full mitigation
-                        ob.mitigated = True; to_rm.append(ob)
-                    elif h > ob.low:          # partial – first or continued tap
-                        if not ob.partial:
-                            ob.cur_h = ob.high
-                            ob.cur_l = h
-                            self._log(ob, c, BEARISH, t)
-                        else:
-                            ob.cur_l = max(ob.cur_l, h)
-                        ob.partial = True
-                else:                         # BULLISH OB
-                    if l < ob.low:            # full mitigation
-                        ob.mitigated = True; to_rm.append(ob)
-                    elif l < ob.high:         # partial tap
-                        if not ob.partial:
-                            ob.cur_h = l
-                            ob.cur_l = ob.low
-                            self._log(ob, c, BULLISH, t)
-                        else:
-                            ob.cur_h = min(ob.cur_h, l)
-                        ob.partial = True
-
-            for ob in to_rm:
-                if ob in self.obs:
-                    self.obs.remove(ob)
-
-    def _log(self, ob, entry, direction, t, live=False, symbol="EURUSD", lot=0.1):
-        sl   = ob.high if direction == BEARISH else ob.low
-        risk = abs(entry - sl)
-        if risk == 0: return
-        tp = entry - risk * self.rr if direction == BEARISH else entry + risk * self.rr
-        
-        trade_dir = 'SHORT' if direction == BEARISH else 'LONG'
-        self.trades.append({
-            'time':   t,
-            'dir':    trade_dir,
-            'entry':  entry,
-            'sl':     sl,
-            'tp':     tp,
-            'result': 'open'
-        })
-        
-        # Execute Live Order if requested
-        if live:
-            order_type = mt5.ORDER_TYPE_SELL if trade_dir == 'SHORT' else mt5.ORDER_TYPE_BUY
-            point = mt5.symbol_info(symbol).point
-            price = mt5.symbol_info_tick(symbol).bid if trade_dir == 'SHORT' else mt5.symbol_info_tick(symbol).ask
-
-            request = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": symbol,
-                "volume": float(lot),
-                "type": order_type,
-                "price": price,
-                "sl": float(sl),
-                "tp": float(tp),
-                "deviation": 20,
-                "magic": 234000,
-                "comment": f"SMC OB {ob.time}",
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
-            }
-
-            result = mt5.order_send(request)
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                print(f"Order failed on {symbol}, lot {lot}: {result.comment}")
-            else:
-                print(f"Order sent! Ticket: {result.order}")
-
+# SMCEngine logic is now imported from smc_engine_v2.py
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -326,7 +68,7 @@ class SMCEngine:
 # ─────────────────────────────────────────────────────────────────────────────
 PRIME=200; VISIBLE=120
 current_idx=PRIME
-engine=SMCEngine(length=15)
+engine=SMCEngine(length=50)
 visible_df=ALL_DATA.iloc[:PRIME].copy()
 engine.update(visible_df)
 
@@ -423,7 +165,7 @@ app.layout=html.Div(style={'height':'100vh'}, children=[
         dcc.Dropdown(
             id='inp-symbol',
             options=[{'label': s, 'value': s} for s in WATCHLIST],
-            value=WATCHLIST[0] if WATCHLIST else "EURUSD",
+            value="BTCUSDm" if "BTCUSDm" in WATCHLIST else WATCHLIST[0] if WATCHLIST else "BTCUSDm",
             clearable=False,
             style={'width':'110px','fontSize':'12px','fontWeight':'600'}
         ),
@@ -439,7 +181,7 @@ app.layout=html.Div(style={'height':'100vh'}, children=[
                 {'label':'1H',  'value':60},
                 {'label':'4H',  'value':240},
             ],
-            value=15,
+            value=1,
             clearable=False,
             style={'width':'70px','fontSize':'12px','fontWeight':'600'}
         ),
@@ -461,7 +203,7 @@ app.layout=html.Div(style={'height':'100vh'}, children=[
                 {'label': ' Live Feed', 'value': 'live'},
                 {'label': ' Auto Trade', 'value': 'trade'}
             ],
-            value=[],
+            value=['live'],
             inline=True,
             style={'fontSize':'12px','fontWeight':'600', 'color':'#131722', 'display':'flex', 'gap':'8px'}
         ),
@@ -471,21 +213,6 @@ app.layout=html.Div(style={'height':'100vh'}, children=[
         html.Button("⏭  +10",       id='btn-n10',    n_clicks=0, className='tv-btn'),
         html.Button("⏭  +50",       id='btn-n50',    n_clicks=0, className='tv-btn'),
         html.Button("⟳  Reset",     id='btn-reset',  n_clicks=0, className='tv-btn reset'),
-        html.Div(className='sep'),
-        html.Span("Lot:", style={'fontSize':'12px','color':'#787b86', 'marginLeft':'4px'}),
-        dcc.Input(id='inp-lot', type='number', value=0.1, step=0.01, className='rr-input', debounce=True, style={'width':'50px'}),
-        html.Div(className='sep'),
-        dcc.Checklist(
-            id='live-toggle',
-            options=[
-                {'label': ' Live Feed', 'value': 'live'},
-                {'label': ' Auto Trade', 'value': 'trade'}
-            ],
-            value=[],
-            inline=True,
-            style={'fontSize':'12px','fontWeight':'600', 'color':'#131722', 'display':'flex', 'gap':'8px'}
-        ),
-        html.Div(className='sep'),
         # Core Stats
         html.Div(id='stats', style={'display': 'flex', 'gap': '18px', 'alignItems': 'center', 'fontSize': '12px', 'color': '#787b86'}, children=[
             html.Div(["Bars: ",    html.Strong("200", id='s-bars')],   className='stat'),
@@ -585,12 +312,12 @@ def build_figure(df: pd.DataFrame, eng: SMCEngine) -> go.Figure:
             line=dict(color=border, width=1),
             layer='below'))
 
-        # Label on right edge (TV style)
+        # Label on left edge (TV style)
         anns.append(dict(
-            x=x_end, y=(y0+y1)/2,
-            text=f"{'15m' if not ob.partial else '15m·T'}",
-            showarrow=False, xanchor='left', yanchor='middle',
-            font=dict(size=9, color=border.replace(',0.7)',')')),
+            x=ob.time, y=y1,
+            text=f"OB({'Refined' if getattr(ob, 'is_refined', False) else '1m'})",
+            showarrow=False, xanchor='left', yanchor='bottom',
+            font=dict(size=9, color=border),
             bgcolor='rgba(255,255,255,0.7)', borderpad=2
         ))
 
@@ -624,21 +351,24 @@ def build_figure(df: pd.DataFrame, eng: SMCEngine) -> go.Figure:
             font=dict(size=8, color=sl_clr)))
 
     # ── BOS / CHoCH ────────────────────────────────────────────────────────────
-    for ev in eng.structure[-25:]:
+    for ev in eng.structure[-30:]:
         is_bos  = ev.kind == 'BOS'
         bull    = ev.direction == BULLISH
         clr     = (TV_BOS_BULL if bull else TV_BOS_BEAR) if is_bos \
                   else (TV_CHoCH_BULL if bull else TV_CHoCH_BEAR)
+        
+        # Horizontal line from event time across visible chart
         shapes.append(dict(type='line', xref='x', yref='y',
             x0=ev.time, x1=x_end, y0=ev.level, y1=ev.level,
-            line=dict(color=clr, width=1, dash='dot')))
+            line=dict(color=clr, width=1, dash='dash')))
+        
+        # Label at the start of the line
         anns.append(dict(
             x=ev.time, y=ev.level,
-            text=ev.kind,
+            text=f"{ev.kind} ({'Bull' if bull else 'Bear'})",
             showarrow=False, xanchor='left', yanchor='bottom',
             font=dict(size=9, color=clr, family='monospace'),
-            bgcolor='rgba(255,255,255,0.85)', borderpad=2,
-            bordercolor=clr, borderwidth=0
+            bgcolor='rgba(255,255,255,0.8)', borderpad=1
         ))
 
     # ── Trade Markers ─────────────────────────────────────────────────────────
@@ -768,11 +498,11 @@ def on_click(n, n10, n50, nr, n_int, symbol, tf_val, prev, rr_val, live_toggles,
         # We don't want to execute live orders on past loaded data
         engine.update(visible_df, rr=rr)
         
-        # Monkey patch _log to execute on live ticks going forward
-        def _live_log(ob, entry, direction, t):
-            # Hack to allow modifying method dynamically while preserving context
-            SMCEngine._log(engine, ob, entry, direction, t, live=is_auto_trade, symbol=symbol, lot=lot)
-        engine._log = _live_log
+        # Custom log function for live trading
+        def live_log_wrapper(ob, entry, direction, t):
+            engine._log(ob, entry, direction, t, live=is_auto_trade, symbol=symbol, lot=lot)
+        
+        engine.update(visible_df, rr=rr)
         
     else:
         # Standard Next Bar / Live Interval Action
@@ -792,6 +522,10 @@ def on_click(n, n10, n50, nr, n_int, symbol, tf_val, prev, rr_val, live_toggles,
                 visible_df=pd.concat([visible_df,new_bars],ignore_index=True)
                 current_idx=end
                 engine.update(visible_df, rr=rr)   # resolves SL/TP internally
+
+    print(f"DEBUG: visible_df={len(visible_df)} symbols={symbol} TF={tf_val}")
+    print(f"DEBUG: Engine state: OBs={len(engine.obs)} Structure={len(engine.structure)} Trend={engine.trend}")
+    if engine.trail_top: print(f"DEBUG: TrailTop={engine.trail_top} at {engine.trail_top_time}")
 
     total,wins,losses,wr,pnl_str,pnl_clr,act_str,act_clr = _calc_stats(engine.trades, rr, visible_df['close'].iloc[-1])
 

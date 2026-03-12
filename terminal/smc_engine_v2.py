@@ -80,30 +80,24 @@ class SMCEngine:
     @staticmethod
     def _leg(H, L, idx, size):
         """
-        Detects swing pivots with a look-back and look-forward window of 'size'.
+        Mirrors Pine Script:
+          if high[size] > ta.highest(size) => 0 (Bearish leg starts / High found)
+          if low[size]  < ta.lowest(size)  => 1 (Bullish leg starts / Low found)
+        `ta.highest(size)` at bar `idx` looks at H[idx-size+1 : idx+1]
         """
-        if idx < size * 2: return -1
+        if idx < size: return -1
         
-        target_idx = idx - size
-        pivot_h = H[target_idx]
-        pivot_l = L[target_idx]
+        pivot_h = H[idx - size]
+        pivot_l = L[idx - size]
         
-        # Look-back window [target_idx - size : target_idx]
-        prev_h = H[target_idx - size : target_idx]
-        prev_l = L[target_idx - size : target_idx]
-        # Look-forward window [target_idx + 1 : target_idx + size + 1]
-        next_h = H[target_idx + 1 : target_idx + size + 1]
-        next_l = L[target_idx + 1 : target_idx + size + 1]
+        # Window of bars AFTER the potential pivot
+        win_h = H[idx - size + 1 : idx + 1]
+        win_l = L[idx - size + 1 : idx + 1]
         
-        if len(prev_h) == 0 or len(next_h) == 0: return -1
+        if len(win_h) == 0: return -1
         
-        # Bullish Pivot (Swing Low)
-        if pivot_l < prev_l.min() and pivot_l < next_l.min():
-            return 1
-        # Bearish Pivot (Swing High)
-        if pivot_h > prev_h.max() and pivot_h > next_h.max():
-            return 0
-            
+        if pivot_h > win_h.max(): return 0   # Bearish leg starts (High pivot)
+        if pivot_l < win_l.min(): return 1   # Bullish leg starts (Low pivot)
         return -1
 
     def update(self, df: pd.DataFrame, rr: float = None):
@@ -186,15 +180,27 @@ class SMCEngine:
 
             # OB detection
             if i >= 3:
-                c2h, c2l = H[i-2], L[i-2]
-                c3h, c3l = H[i-3], L[i-3]
+                c2h, c2l = H[i-2], L[i-2]   # OB candle (bar[2])
+                c1h, c1l = H[i-1], L[i-1]   # Middle candle (bar[1])
+                c3h, c3l = H[i-3], L[i-3]   # Candle before OB (bar[3])
+
+                # 1. Liquidity sweep at bar[2]
                 bull_sweep = c2l < c3l
-                bull_fvg   = l  > c2h
                 bear_sweep = c2h > c3h
-                bear_fvg   = h  < c2l
+                
+                # 2. Middle candle MUST NOT take liquidity of OB candle (Strict Dominance)
+                # Matches: low[1] >= low[2] and high[1] <= high[2]
+                bull_filter = c1l >= c2l 
+                bear_filter = c1h <= c2h
+
+                # 3. FVG must exist between bar[2] (OB) and bar[0] (Current)
+                # Matches: low > high[2] (Bullish) / high < low[2] (Bearish)
+                bull_fvg   = l > c2h
+                bear_fvg   = h < c2l
+
                 ob_time    = T[i-2]
 
-                if bull_sweep and bull_fvg and self.trend == BULLISH:
+                if bull_sweep and bull_filter and bull_fvg and self.trend == BULLISH:
                     if not any(ob.time == ob_time and ob.bias == BULLISH for ob in self.obs):
                         new_ob = OB(c2h, c2l, ob_time, BULLISH)
                         # Nested/Refined detection
@@ -203,7 +209,7 @@ class SMCEngine:
                             new_ob.is_refined = True
                         self.obs.insert(0, new_ob)
 
-                if bear_sweep and bear_fvg and self.trend == BEARISH:
+                if bear_sweep and bear_filter and bear_fvg and self.trend == BEARISH:
                     if not any(ob.time == ob_time and ob.bias == BEARISH for ob in self.obs):
                         new_ob = OB(c2h, c2l, ob_time, BEARISH)
                         # Nested/Refined detection

@@ -1,7 +1,7 @@
-import { 
-    type ICustomSeriesPaneView, 
-    type ICustomSeriesPaneRenderer, 
-    type PaneRendererCustomData, 
+import {
+    type ICustomSeriesPaneView,
+    type ICustomSeriesPaneRenderer,
+    type PaneRendererCustomData,
     type PriceToCoordinateConverter,
     type CustomData,
     type Time,
@@ -16,6 +16,7 @@ interface OBSegment {
     low: number;
     color: string;
     borderColor: string;
+    is_refined: boolean;
 }
 
 interface OBPoint extends CustomData<Time> {
@@ -41,16 +42,20 @@ class OrderBlockRenderer implements ICustomSeriesPaneRenderer {
 
             for (const bar of this._data!.bars) {
                 if (!bar.originalData || !bar.originalData.segments) continue;
-                
+
                 const x = bar.x * horizontalPixelRatio;
                 for (const seg of bar.originalData.segments) {
                     const yHigh = (priceConverter(seg.high) ?? 0) * verticalPixelRatio;
                     const yLow = (priceConverter(seg.low) ?? 0) * verticalPixelRatio;
-                    
-                    const height = Math.abs(yLow - yHigh);
-                    ctx.fillStyle = seg.color;
-                    ctx.fillRect(x, Math.min(yHigh, yLow), barWidth, height);
 
+                    const height = Math.abs(yLow - yHigh);
+                    const top = Math.min(yHigh, yLow);
+
+                    // Draw fill
+                    ctx.fillStyle = seg.color;
+                    ctx.fillRect(x, top, barWidth, height);
+
+                    // Draw borders
                     ctx.strokeStyle = seg.borderColor;
                     ctx.lineWidth = 1 * verticalPixelRatio;
                     ctx.beginPath();
@@ -59,6 +64,24 @@ class OrderBlockRenderer implements ICustomSeriesPaneRenderer {
                     ctx.moveTo(x, yLow);
                     ctx.lineTo(x + barWidth, yLow);
                     ctx.stroke();
+
+                    // Draw Text Label (only on the starting bar of the OB or if wide enough)
+                    // For simplicity, we just draw it if the segment exists. 
+                    // To prevent overlap, we check a flag or just draw it once per unique OB time if we had that info.
+                    // Here we'll draw it on every bar but centered or left-aligned.
+                    ctx.fillStyle = seg.borderColor; // Use border color for text
+                    ctx.font = `${Math.floor(8 * verticalPixelRatio)}px Arial`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+
+                    const label = seg.is_refined ? 'Refined OB' : 'OB';
+                    const textX = x + 2 * horizontalPixelRatio;
+                    const textY = top + height / 2;
+
+                    // Only draw text if it fits vertically
+                    if (height > 10 * verticalPixelRatio) {
+                        ctx.fillText(label, textX, textY);
+                    }
                 }
             }
         });

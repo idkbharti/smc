@@ -60,7 +60,12 @@ app.add_middleware(
 @app.get("/api/init")
 async def get_init():
     if not mt5.initialize():
-        return {"status": "error", "message": "MT5 not connected"}
+        return {
+            "status": "error", 
+            "message": f"MT5 not connected. Error: {mt5.last_error()}",
+            "account": None,
+            "watchlist": ["BTCUSDm", "EURUSDm", "XAUUSDm"]
+        }
     
     acc = mt5.account_info()
     symbols = mt5.symbols_get()
@@ -139,6 +144,9 @@ async def analyze_data(payload: Dict):
 
     # The engine needs a rolling window or the full history up to now to detect structure
     length = payload.get("length", 20)
+    
+    # Slice data to the current "visible" range (for bar replay support)
+    visible_df = df.iloc[:current_idx] if current_idx < len(df) else df
     
     # Run engine (matches "stable" config with length=20 by default)
     engine = SMCEngine(length=length, rr=rr) 

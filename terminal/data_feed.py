@@ -25,11 +25,14 @@ def generate_data(rows: int = 2000, start_price: float = 1.10) -> pd.DataFrame:
         })
     return pd.DataFrame(out)
 
-def fetch_mt5_data(symbol="EURUSD", timeframe=mt5.TIMEFRAME_M15, bars=2000):
+def fetch_mt5_data(symbol="BTCUSDm", timeframe=mt5.TIMEFRAME_M1, bars=2000):
     if not mt5.initialize():
         # Fallback to synthetic if MT5 not available
         return generate_data(bars)
         
+    # Ensure symbol is in Market Watch
+    mt5.symbol_select(symbol, True)
+    
     rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, bars)
     if rates is None:
         return generate_data(bars)

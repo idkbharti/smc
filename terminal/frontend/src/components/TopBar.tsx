@@ -21,22 +21,32 @@ interface TopBarProps {
 
 const TopBar: React.FC<TopBarProps> = ({ symbol, setSymbol, timeframe, setTimeframe, watchlist }) => {
   const [account, setAccount] = useState<AccountInfo | null>(null);
+  const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     axios.get('http://127.0.0.1:8085/api/init').then(res => {
-      if (res.data.account) setAccount(res.data.account);
-    }).catch(err => console.error("Init failed", err));
+      if (res.data.account) {
+        setAccount(res.data.account);
+        setConnected(true);
+      }
+    }).catch(err => {
+      console.error("Init failed", err);
+      setConnected(false);
+    });
   }, []);
 
   return (
     <div className="h-10 border-b border-tv-border bg-white flex items-center px-3 gap-2">
-      <span className="font-bold text-tv-blue text-sm tracking-tight mr-2">⚡ SMC Terminal</span>
-      
+      <div className="flex items-center gap-2 mr-2">
+        <span className="font-bold text-tv-blue text-sm tracking-tight">⚡ SMC Terminal</span>
+        <div className={`w-2 h-2 rounded-full ${connected ? 'bg-tv-green shadow-[0_0_5px_rgba(38,166,154,0.5)]' : 'bg-tv-red animate-pulse'}`} title={connected ? 'Connected to Backend' : 'Disconnected'} />
+      </div>
+
       <div className="sep" />
 
       {/* Symbol Select */}
       <span className="text-[11px] text-tv-muted uppercase font-semibold ml-1">Symbol</span>
-      <select 
+      <select
         className="tv-select w-28"
         value={symbol}
         onChange={(e) => setSymbol(e.target.value)}
@@ -48,7 +58,7 @@ const TopBar: React.FC<TopBarProps> = ({ symbol, setSymbol, timeframe, setTimefr
 
       {/* TF Select */}
       <span className="text-[11px] text-tv-muted uppercase font-semibold ml-1">TF</span>
-      <select 
+      <select
         className="tv-select w-16"
         value={timeframe}
         onChange={(e) => setTimeframe(Number(e.target.value))}
@@ -67,7 +77,7 @@ const TopBar: React.FC<TopBarProps> = ({ symbol, setSymbol, timeframe, setTimefr
         <div className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase text-white ${account?.trade_mode === 0 ? 'bg-orange-500' : 'bg-tv-green'}`}>
           {account?.trade_mode === 0 ? 'Demo' : 'Real'}
         </div>
-        
+
         <div className="w-7 h-7 bg-tv-blue rounded-full flex items-center justify-center text-white cursor-pointer">
           <User size={16} />
         </div>
